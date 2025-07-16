@@ -47,7 +47,8 @@ public class EnhancedButterknifeConverter {
         // Perform conversion
         removeAnnotations(mainClass);
         addViewBindingSupport(project, mainClass);
-        removeFieldDeclarations(mainClass);
+        replaceFieldReferences(project, mainClass, bindViewFields);
+        removeFieldDeclarations(mainClass, bindViewFields);
         addOnClickListeners(project, mainClass, onClickMethods);
         removeButterknifeImports(javaFile);
         removeButterknifeBindCalls(mainClass);
@@ -389,6 +390,42 @@ public class EnhancedButterknifeConverter {
         }
     }
     
+    /**
+     * Replaces all field references throughout the class with binding references.
+     * Example: tvEditAddress.setText() → binding.actShipTvEditAddress.setText()
+     */
+    private static void replaceFieldReferences(Project project, PsiClass psiClass, Map<String, FieldInfo> bindViewFields) {
+        if (bindViewFields.isEmpty()) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        // Find all references to the @BindView fields and replace them
+        for (Map.Entry<String, FieldInfo> entry : bindViewFields.entrySet()) {
+            String resourceId = entry.getKey();
+            FieldInfo fieldInfo = entry.getValue();
+            String fieldName = fieldInfo.name;
+            
+            // Convert resource ID to binding field name
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            
+            // Find all references to this field in the class
+            Collection<PsiReferenceExpression> references = PsiTreeUtil.findChildrenOfType(psiClass, PsiReferenceExpression.class);
+            
+            for (PsiReferenceExpression reference : references) {
+                if (fieldName.equals(reference.getReferenceName())) {
+                    // Replace with binding.fieldName for any field reference
+                    // Skip only if this is part of the field declaration itself
+                    PsiElement parent = reference.getParent();
+                    if (!(parent instanceof PsiField)) {
+                        String replacementText = BINDING_PREFIX + bindingFieldName;
+                        PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
+                        reference.replace(newExpression);
+                    }
+                }
+            }
+        }
+    }
+
     private static void removeFieldDeclarations(PsiClass psiClass) {
         for (PsiField field : psiClass.getFields()) {
             PsiAnnotation bindViewAnnotation = field.getAnnotation(BUTTERKNIFE_BIND_VIEW);
