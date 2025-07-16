@@ -1,0 +1,37 @@
+plugins {
+    id 'java'
+    id 'org.jetbrains.intellij' version '1.17.2'
+}
+
+group = 'com.butterkniferemoval'
+version = '1.4.0'
+
+repositories {
+    mavenCentral()
+}
+
+intellij {
+    version = '2023.2'
+    type = 'IC'
+    plugins = ['com.intellij.java']
+}
+
+patchPluginXml {
+    sinceBuild = '232'
+    untilBuild = '243.*'
+}
+
+signPlugin {
+    certificateChain = System.getenv("CERTIFICATE_CHAIN")
+    privateKey = System.getenv("PRIVATE_KEY")
+    password = System.getenv("PRIVATE_KEY_PASSWORD")
+}
+
+publishPlugin {
+    token = System.getenv("PUBLISH_TOKEN")
+}
+
+tasks.withType(JavaCompile) {
+    sourceCompatibility = "17"
+    targetCompatibility = "17"
+}

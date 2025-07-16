@@ -1,0 +1,87 @@
+<idea-plugin>
+    <id>com.butterkniferemoval.plugin</id>
+    <name>Butterknife Removal Tool</name>
+    <vendor email="ms.mariswamy@gmail.com" url="https://github.com/ms.mariswamy/butterknife-removal-tool">Butterknife Removal Tool</vendor>
+
+    <description><![CDATA[
+    <p>Automatically removes Butterknife annotations from Android projects and converts them to standard findViewById calls.</p>
+    
+    <h3>Features:</h3>
+    <ul>
+        <li>Converts @BindView annotations to findViewById() calls</li>
+        <li>Converts @OnClick annotations to setOnClickListener() calls</li>
+        <li>Removes Butterknife imports and bind calls</li>
+        <li>Process entire project or individual files</li>
+        <li>Maintains code formatting and structure</li>
+    </ul>
+    
+    <h3>Usage:</h3>
+    <p>Right-click on any Java file or package in your Android project and select "Remove Butterknife" from the context menu.</p>
+    ]]></description>
+
+    <change-notes><![CDATA[
+    <h3>Version 1.1.0</h3>
+    <ul>
+        <li>Fixed @OnClick functionality to work independently of @BindView</li>
+        <li>Added support for multiple resource IDs in @OnClick annotations</li>
+        <li>Added "Remove Butterknife" action to Refactor menu</li>
+        <li>Improved method parameter handling for onClick methods</li>
+        <li>Updated IDE compatibility to support newer versions</li>
+    </ul>
+    
+    <h3>Version 1.0.0</h3>
+    <ul>
+        <li>Initial release</li>
+        <li>Support for @BindView and @OnClick conversion</li>
+        <li>File and directory processing options</li>
+    </ul>
+    ]]></change-notes>
+
+    <idea-version since-build="232" until-build="243.*"/>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+    </extensions>
+
+    <actions>
+        <group id="ButterknifeRemoval.ContextMenu" text="Butterknife Removal" popup="true">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="after" relative-to-action="CutCopyPasteGroup"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="CutCopyPasteGroup"/>
+            
+            <action id="ButterknifeRemoval.RemoveFromFile" 
+                    class="com.butterkniferemoval.RemoveButterknifeAction" 
+                    text="Remove Butterknife from File" 
+                    description="Remove Butterknife annotations from the selected file">
+            </action>
+            
+            <action id="ButterknifeRemoval.RemoveFromDirectory" 
+                    class="com.butterkniferemoval.RemoveButterknifeFromDirectoryAction" 
+                    text="Remove Butterknife from Directory" 
+                    description="Remove Butterknife annotations from all Java files in the selected directory">
+            </action>
+        </group>
+
+        <action id="ButterknifeRemoval.RemoveFromProject" 
+                class="com.butterkniferemoval.RemoveButterknifeFromProjectAction" 
+                text="Remove Butterknife from Project" 
+                description="Remove Butterknife annotations from entire project">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+
+        <action id="ButterknifeRemoval.RefactorFile" 
+                class="com.butterkniferemoval.RemoveButterknifeAction" 
+                text="Remove Butterknife" 
+                description="Remove Butterknife annotations from current file">
+            <add-to-group group-id="RefactoringMenu" anchor="last"/>
+        </action>
+
+        <action id="ButterknifeRemoval.CodeMenu" 
+                class="com.butterkniferemoval.RemoveButterknifeAction" 
+                text="Remove Butterknife from File" 
+                description="Remove Butterknife annotations from current file">
+            <add-to-group group-id="CodeMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
