@@ -3,29 +3,23 @@ package com.butterkniferemoval;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.*;
-import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.util.PsiTreeUtil;
 
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class ButterknifeConverter {
     
-    private static final Pattern BIND_VIEW_PATTERN = Pattern.compile(
-        "@BindView\\s*\\(\\s*R\\.id\\.([^)]+)\\)\\s*([\\w<>]+)\\s+(\\w+);",
-        Pattern.MULTILINE
-    );
+    private static final String BUTTERKNIFE_BIND_VIEW = "butterknife.BindView";
+    private static final String R_ID_PREFIX = "R.id.";
+    private static final String BINDING_PREFIX = "binding.";
+    private static final String SET_CONTENT_VIEW = "setContentView";
     
-    private static final Pattern ON_CLICK_PATTERN = Pattern.compile(
-        "@OnClick\\s*\\(\\s*R\\.id\\.([^)]+)\\)\\s*(?:public\\s+|private\\s+)?void\\s+(\\w+)\\s*\\([^)]*\\)",
-        Pattern.MULTILINE
-    );
+    private ButterknifeConverter() {
+        // Utility class
+    }
 
     public static void convertFile(Project project, PsiJavaFile javaFile) {
-        WriteCommandAction.runWriteCommandAction(project, () -> {
-            convertButterknifeAnnotations(project, javaFile);
-        });
+        WriteCommandAction.runWriteCommandAction(project, () -> convertButterknifeAnnotations(project, javaFile));
     }
 
     private static void convertButterknifeAnnotations(Project project, PsiJavaFile javaFile) {
@@ -53,9 +47,13 @@ public class ButterknifeConverter {
             return;
         }
         
+        // Validate and ensure XML IDs exist
+        validateXmlIds(project, mainClass, bindViewFields);
+        
         removeAnnotations(mainClass, bindViewFields, onClickMethods, onCheckedChangedMethods, 
                          onEditorActionMethods, onFocusChangeMethods, onTextChangedMethods);
-        addFindViewByIdCalls(project, mainClass, bindViewFields);
+        addViewBindingSupport(project, mainClass, javaFile);
+        removeFieldDeclarations(mainClass, bindViewFields);
         addOnClickListeners(project, mainClass, bindViewFields, onClickMethods);
         addOnCheckedChangedListeners(project, mainClass, bindViewFields, onCheckedChangedMethods);
         addOnEditorActionListeners(project, mainClass, bindViewFields, onEditorActionMethods);
@@ -64,11 +62,61 @@ public class ButterknifeConverter {
         removeButterknifeImports(javaFile);
         removeButterknifeBindCalls(mainClass);
     }
+    
+    /**
+     * Validates that all required resource IDs exist in XML layout files.
+     * Creates missing IDs when needed.
+     */
+    private static void validateXmlIds(Project project, PsiClass mainClass, Map<String, FieldInfo> bindViewFields) {
+        if (bindViewFields.isEmpty()) {
+            return;
+        }
+        
+        // Extract layout name from onCreate method or class name
+        String layoutName = extractLayoutNameFromClass(mainClass);
+        
+        // Use XmlLayoutHandler to validate and ensure IDs exist
+        XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+        Map<String, String> validationResults = xmlHandler.validateAndEnsureIds(bindViewFields, layoutName);
+        
+        // Log validation results (could be enhanced to show user notification)
+        for (Map.Entry<String, String> entry : validationResults.entrySet()) {
+            String resourceId = entry.getKey();
+            String result = entry.getValue();
+            // In a real implementation, you might want to log this or show to user
+            System.out.println("Resource ID '" + resourceId + "': " + result);
+        }
+    }
+    
+    /**
+     * Extracts layout name from setContentView call or generates from class name.
+     */
+    private static String extractLayoutNameFromClass(PsiClass psiClass) {
+        // First try to find layout name from onCreate method
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod != null) {
+            PsiCodeBlock codeBlock = onCreateMethod.getBody();
+            if (codeBlock != null) {
+                PsiStatement[] statements = codeBlock.getStatements();
+                for (PsiStatement statement : statements) {
+                    if (statement.getText().contains(SET_CONTENT_VIEW)) {
+                        String layoutName = XmlLayoutHandler.extractLayoutNameFromSetContentView(statement.getText());
+                        if (layoutName != null) {
+                            return layoutName;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fall back to generating layout name from class name
+        return XmlLayoutHandler.generateLayoutNameFromClassName(psiClass.getName());
+    }
 
     private static void collectBindViewFields(PsiClass psiClass, Map<String, FieldInfo> bindViewFields) {
         PsiField[] fields = psiClass.getFields();
         for (PsiField field : fields) {
-            PsiAnnotation bindViewAnnotation = field.getAnnotation("butterknife.BindView");
+            PsiAnnotation bindViewAnnotation = field.getAnnotation(BUTTERKNIFE_BIND_VIEW);
             if (bindViewAnnotation != null) {
                 String resourceId = extractResourceId(bindViewAnnotation);
                 if (resourceId != null) {
@@ -284,27 +332,21 @@ public class ButterknifeConverter {
         PsiCodeBlock codeBlock = onCreateMethod.getBody();
         if (codeBlock == null) return;
         
-        PsiStatement lastFindViewStatement = findLastFindViewStatement(codeBlock);
-        if (lastFindViewStatement == null) return;
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
         
         PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
         
         for (Map.Entry<String, String> entry : onClickMethods.entrySet()) {
             String resourceId = entry.getKey();
             String methodCall = entry.getValue();
-            FieldInfo fieldInfo = bindViewFields.get(resourceId);
             
-            String listenerStatement;
-            if (fieldInfo != null) {
-                // Use existing field if available
-                listenerStatement = fieldInfo.name + ".setOnClickListener(v -> " + methodCall + ");";
-            } else {
-                // Create direct findViewById call for views without @BindView
-                listenerStatement = "findViewById(R.id." + resourceId + ").setOnClickListener(v -> " + methodCall + ");";
-            }
+            // Convert resource ID to binding field name (R.id.my_button -> myButton)
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            String listenerStatement = "binding." + bindingFieldName + ".setOnClickListener(v -> " + methodCall + ");";
             
             PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
-            codeBlock.addAfter(statement, lastFindViewStatement);
+            codeBlock.addAfter(statement, lastBindingStatement);
         }
     }
 
@@ -346,6 +388,187 @@ public class ButterknifeConverter {
         return lastFindViewStatement;
     }
 
+    private static PsiStatement findLastBindingStatement(PsiCodeBlock codeBlock) {
+        PsiStatement[] statements = codeBlock.getStatements();
+        for (PsiStatement statement : statements) {
+            if (statement.getText().contains("binding =") && statement.getText().contains("inflate")) {
+                return statement;
+            }
+        }
+        return null;
+    }
+
+    private static String convertResourceIdToBindingFieldName(String resourceId) {
+        // Convert snake_case to camelCase (et_promotion_code -> etPromotionCode)
+        StringBuilder result = new StringBuilder();
+        String[] parts = resourceId.split("_");
+        
+        for (int i = 0; i < parts.length; i++) {
+            if (i == 0) {
+                result.append(parts[i].toLowerCase());
+            } else {
+                result.append(parts[i].substring(0, 1).toUpperCase())
+                      .append(parts[i].substring(1).toLowerCase());
+            }
+        }
+        
+        return result.toString();
+    }
+
+    private static String getBindingPackageName(PsiJavaFile javaFile) {
+        String packageName = javaFile.getPackageName();
+        return packageName + ".databinding";
+    }
+
+    private static void addViewBindingSupport(Project project, PsiClass psiClass, PsiJavaFile javaFile) {
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        // First, try to determine the correct binding class name from setContentView
+        String bindingClassName = extractBindingClassNameFromOnCreate(psiClass);
+        
+        // If we can't find it, fall back to generating from class name
+        if (bindingClassName == null) {
+            String className = psiClass.getName();
+            bindingClassName = generateBindingClassName(className);
+        }
+        
+        // Add binding field declaration
+        String bindingFieldDeclaration = "private " + bindingClassName + " binding;";
+        PsiField bindingField = factory.createFieldFromText(bindingFieldDeclaration, null);
+        psiClass.add(bindingField);
+        
+        // Skip adding import for now - View Binding classes are generated at compile time
+        // The import will be added automatically by the IDE when the binding class is generated
+        
+        // Update onCreate method
+        updateOnCreateForViewBinding(project, psiClass, bindingClassName);
+        
+        // Add onDestroy method if it doesn't exist
+        addOnDestroyMethod(project, psiClass);
+    }
+    
+    private static String extractBindingClassNameFromOnCreate(PsiClass psiClass) {
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return null;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return null;
+        
+        PsiStatement[] statements = codeBlock.getStatements();
+        for (PsiStatement statement : statements) {
+            if (statement.getText().contains("setContentView")) {
+                return extractBindingClassNameFromSetContentView(statement.getText());
+            }
+        }
+        return null;
+    }
+    
+    private static String generateBindingClassName(String activityName) {
+        // Convert ActivityName to ActivityNameBinding
+        if (activityName.endsWith("Activity")) {
+            return activityName.substring(0, activityName.length() - 8) + "Binding";
+        } else if (activityName.endsWith("Fragment")) {
+            return activityName.substring(0, activityName.length() - 8) + "Binding";
+        } else {
+            return activityName + "Binding";
+        }
+    }
+    
+    private static void updateOnCreateForViewBinding(Project project, PsiClass psiClass, String bindingClassName) {
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        // Find and replace setContentView
+        PsiStatement[] statements = codeBlock.getStatements();
+        for (PsiStatement statement : statements) {
+            if (statement.getText().contains("setContentView")) {
+                // Extract layout name from setContentView call
+                String actualBindingClassName = extractBindingClassNameFromSetContentView(statement.getText());
+                if (actualBindingClassName != null) {
+                    bindingClassName = actualBindingClassName;
+                }
+                
+                // Create binding initialization and new setContentView statements
+                PsiStatement bindingStatement = factory.createStatementFromText("binding = " + bindingClassName + ".inflate(getLayoutInflater());", null);
+                PsiStatement setContentStatement = factory.createStatementFromText("setContentView(binding.getRoot());", null);
+                
+                // Add binding initialization before the original setContentView
+                codeBlock.addBefore(bindingStatement, statement);
+                
+                // Replace original setContentView with new binding-based setContentView
+                statement.replace(setContentStatement);
+                break;
+            }
+        }
+    }
+    
+    private static String extractBindingClassNameFromSetContentView(String setContentViewStatement) {
+        // Extract layout name from setContentView(R.layout.activity_checkout_new)
+        if (setContentViewStatement.contains("R.layout.")) {
+            int startIndex = setContentViewStatement.indexOf("R.layout.") + 9;
+            int endIndex = setContentViewStatement.indexOf(")", startIndex);
+            if (endIndex > startIndex) {
+                String layoutName = setContentViewStatement.substring(startIndex, endIndex);
+                return convertLayoutNameToBindingClassName(layoutName);
+            }
+        }
+        return null;
+    }
+    
+    private static String convertLayoutNameToBindingClassName(String layoutName) {
+        // Convert activity_checkout_new to ActivityCheckoutNewBinding
+        StringBuilder result = new StringBuilder();
+        String[] parts = layoutName.split("_");
+        
+        for (String part : parts) {
+            if (!part.isEmpty()) {
+                result.append(part.substring(0, 1).toUpperCase())
+                      .append(part.substring(1).toLowerCase());
+            }
+        }
+        
+        return result.toString() + "Binding";
+    }
+    
+    private static void addOnDestroyMethod(Project project, PsiClass psiClass) {
+        // Check if onDestroy already exists
+        PsiMethod[] methods = psiClass.findMethodsByName("onDestroy", false);
+        if (methods.length > 0) {
+            // Add binding = null to existing onDestroy
+            PsiMethod onDestroyMethod = methods[0];
+            PsiCodeBlock codeBlock = onDestroyMethod.getBody();
+            if (codeBlock != null) {
+                PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+                PsiStatement bindingNullStatement = factory.createStatementFromText("binding = null;", null);
+                codeBlock.addBefore(bindingNullStatement, codeBlock.getLastBodyElement());
+            }
+        } else {
+            // Create new onDestroy method
+            PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+            String onDestroyMethod = "@Override\n" +
+                                    "protected void onDestroy() {\n" +
+                                    "    super.onDestroy();\n" +
+                                    "    binding = null;\n" +
+                                    "}";
+            PsiMethod newOnDestroyMethod = factory.createMethodFromText(onDestroyMethod, null);
+            psiClass.add(newOnDestroyMethod);
+        }
+    }
+    
+    private static void removeFieldDeclarations(PsiClass psiClass, Map<String, FieldInfo> bindViewFields) {
+        for (PsiField field : psiClass.getFields()) {
+            PsiAnnotation bindViewAnnotation = field.getAnnotation("butterknife.BindView");
+            if (bindViewAnnotation != null) {
+                field.delete();
+            }
+        }
+    }
+
     private static void removeButterknifeImports(PsiJavaFile javaFile) {
         PsiImportList importList = javaFile.getImportList();
         if (importList == null) return;
@@ -380,25 +603,20 @@ public class ButterknifeConverter {
         PsiCodeBlock codeBlock = onCreateMethod.getBody();
         if (codeBlock == null) return;
         
-        PsiStatement lastFindViewStatement = findLastFindViewStatement(codeBlock);
-        if (lastFindViewStatement == null) return;
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
         
         PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
         
         for (Map.Entry<String, String> entry : onCheckedChangedMethods.entrySet()) {
             String resourceId = entry.getKey();
             String methodCall = entry.getValue();
-            FieldInfo fieldInfo = bindViewFields.get(resourceId);
             
-            String listenerStatement;
-            if (fieldInfo != null) {
-                listenerStatement = fieldInfo.name + ".setOnCheckedChangeListener((buttonView, isChecked) -> " + methodCall + ");";
-            } else {
-                listenerStatement = "findViewById(R.id." + resourceId + ").setOnCheckedChangeListener((buttonView, isChecked) -> " + methodCall + ");";
-            }
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            String listenerStatement = "binding." + bindingFieldName + ".setOnCheckedChangeListener((buttonView, isChecked) -> " + methodCall + ");";
             
             PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
-            codeBlock.addAfter(statement, lastFindViewStatement);
+            codeBlock.addAfter(statement, lastBindingStatement);
         }
     }
 
@@ -411,25 +629,20 @@ public class ButterknifeConverter {
         PsiCodeBlock codeBlock = onCreateMethod.getBody();
         if (codeBlock == null) return;
         
-        PsiStatement lastFindViewStatement = findLastFindViewStatement(codeBlock);
-        if (lastFindViewStatement == null) return;
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
         
         PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
         
         for (Map.Entry<String, String> entry : onEditorActionMethods.entrySet()) {
             String resourceId = entry.getKey();
             String methodCall = entry.getValue();
-            FieldInfo fieldInfo = bindViewFields.get(resourceId);
             
-            String listenerStatement;
-            if (fieldInfo != null) {
-                listenerStatement = fieldInfo.name + ".setOnEditorActionListener((v, actionId, event) -> " + methodCall + ");";
-            } else {
-                listenerStatement = "findViewById(R.id." + resourceId + ").setOnEditorActionListener((v, actionId, event) -> " + methodCall + ");";
-            }
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            String listenerStatement = "binding." + bindingFieldName + ".setOnEditorActionListener((v, actionId, event) -> " + methodCall + ");";
             
             PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
-            codeBlock.addAfter(statement, lastFindViewStatement);
+            codeBlock.addAfter(statement, lastBindingStatement);
         }
     }
 
@@ -442,25 +655,20 @@ public class ButterknifeConverter {
         PsiCodeBlock codeBlock = onCreateMethod.getBody();
         if (codeBlock == null) return;
         
-        PsiStatement lastFindViewStatement = findLastFindViewStatement(codeBlock);
-        if (lastFindViewStatement == null) return;
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
         
         PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
         
         for (Map.Entry<String, String> entry : onFocusChangeMethods.entrySet()) {
             String resourceId = entry.getKey();
             String methodCall = entry.getValue();
-            FieldInfo fieldInfo = bindViewFields.get(resourceId);
             
-            String listenerStatement;
-            if (fieldInfo != null) {
-                listenerStatement = fieldInfo.name + ".setOnFocusChangeListener((v, hasFocus) -> " + methodCall + ");";
-            } else {
-                listenerStatement = "findViewById(R.id." + resourceId + ").setOnFocusChangeListener((v, hasFocus) -> " + methodCall + ");";
-            }
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            String listenerStatement = "binding." + bindingFieldName + ".setOnFocusChangeListener((v, hasFocus) -> " + methodCall + ");";
             
             PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
-            codeBlock.addAfter(statement, lastFindViewStatement);
+            codeBlock.addAfter(statement, lastBindingStatement);
         }
     }
 
@@ -473,16 +681,16 @@ public class ButterknifeConverter {
         PsiCodeBlock codeBlock = onCreateMethod.getBody();
         if (codeBlock == null) return;
         
-        PsiStatement lastFindViewStatement = findLastFindViewStatement(codeBlock);
-        if (lastFindViewStatement == null) return;
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
         
         PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
         
         for (Map.Entry<String, String> entry : onTextChangedMethods.entrySet()) {
             String resourceId = entry.getKey();
             String methodCall = entry.getValue();
-            FieldInfo fieldInfo = bindViewFields.get(resourceId);
             
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
             String listenerStatement;
             String actualMethodCall;
             
@@ -491,34 +699,20 @@ public class ButterknifeConverter {
                 String methodName = methodCall.substring(9); // Remove "EDITABLE:" prefix
                 actualMethodCall = methodName + "(s)"; // Use Editable from afterTextChanged
                 
-                if (fieldInfo != null) {
-                    listenerStatement = fieldInfo.name + ".addTextChangedListener(new TextWatcher() { " +
-                        "@Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {} " +
-                        "@Override public void onTextChanged(CharSequence s, int start, int before, int count) {} " +
-                        "@Override public void afterTextChanged(Editable s) { " + actualMethodCall + " } });";
-                } else {
-                    listenerStatement = "findViewById(R.id." + resourceId + ").addTextChangedListener(new TextWatcher() { " +
-                        "@Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {} " +
-                        "@Override public void onTextChanged(CharSequence s, int start, int before, int count) {} " +
-                        "@Override public void afterTextChanged(Editable s) { " + actualMethodCall + " } });";
-                }
+                listenerStatement = "binding." + bindingFieldName + ".addTextChangedListener(new TextWatcher() { " +
+                    "@Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {} " +
+                    "@Override public void onTextChanged(CharSequence s, int start, int before, int count) {} " +
+                    "@Override public void afterTextChanged(Editable s) { " + actualMethodCall + " } });";
             } else {
                 // CharSequence parameter - use onTextChanged
-                if (fieldInfo != null) {
-                    listenerStatement = fieldInfo.name + ".addTextChangedListener(new TextWatcher() { " +
-                        "@Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {} " +
-                        "@Override public void onTextChanged(CharSequence s, int start, int before, int count) { " + methodCall + " } " +
-                        "@Override public void afterTextChanged(Editable s) {} });";
-                } else {
-                    listenerStatement = "findViewById(R.id." + resourceId + ").addTextChangedListener(new TextWatcher() { " +
-                        "@Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {} " +
-                        "@Override public void onTextChanged(CharSequence s, int start, int before, int count) { " + methodCall + " } " +
-                        "@Override public void afterTextChanged(Editable s) {} });";
-                }
+                listenerStatement = "binding." + bindingFieldName + ".addTextChangedListener(new TextWatcher() { " +
+                    "@Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {} " +
+                    "@Override public void onTextChanged(CharSequence s, int start, int before, int count) { " + methodCall + " } " +
+                    "@Override public void afterTextChanged(Editable s) {} });";
             }
             
             PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
-            codeBlock.addAfter(statement, lastFindViewStatement);
+            codeBlock.addAfter(statement, lastBindingStatement);
         }
     }
 

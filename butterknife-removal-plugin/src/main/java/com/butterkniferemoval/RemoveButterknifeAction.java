@@ -53,14 +53,14 @@ public class RemoveButterknifeAction extends AnAction {
         PsiJavaFile javaFile = (PsiJavaFile) psiFile;
         
         try {
-            ButterknifeConverter.convertFile(project, javaFile);
+            EnhancedButterknifeConverter.convertFile(project, javaFile);
             Messages.showInfoMessage(project, 
-                "Butterknife annotations have been successfully removed from " + javaFile.getName(), 
-                "Butterknife Removal Complete");
+                "Butterknife annotations have been successfully converted to View Binding. XML IDs have been validated and created if missing.", 
+                "Butterknife Conversion Complete");
         } catch (Exception ex) {
             Messages.showErrorDialog(project, 
-                "Error removing Butterknife annotations: " + ex.getMessage(), 
-                "Butterknife Removal Error");
+                "Error converting Butterknife annotations: " + ex.getMessage(), 
+                "Butterknife Conversion Error");
         }
     }
 
