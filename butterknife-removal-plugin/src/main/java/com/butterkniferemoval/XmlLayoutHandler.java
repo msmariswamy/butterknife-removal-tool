@@ -76,21 +76,27 @@ public class XmlLayoutHandler {
      */
     private XmlFile findLayoutFile(String layoutName) {
         if (layoutName == null) {
+            System.out.println("DEBUG: Layout name is null");
             return null;
         }
         
         String fileName = layoutName + ".xml";
+        System.out.println("DEBUG: Looking for layout file: " + fileName);
         Collection<VirtualFile> files = FileTypeIndex.getFiles(XmlFileType.INSTANCE, GlobalSearchScope.projectScope(project));
+        System.out.println("DEBUG: Found " + files.size() + " XML files in project");
         
         for (VirtualFile virtualFile : files) {
+            System.out.println("DEBUG: Checking file: " + virtualFile.getName() + " at path: " + virtualFile.getPath());
             if (virtualFile.getName().equals(fileName)) {
                 PsiFile psiFile = PsiManager.getInstance(project).findFile(virtualFile);
                 if (psiFile instanceof XmlFile xmlFile && isLayoutFile(xmlFile)) {
+                    System.out.println("DEBUG: Found matching layout file: " + virtualFile.getPath());
                     return xmlFile;
                 }
             }
         }
         
+        System.out.println("DEBUG: No matching layout file found for: " + fileName);
         return null;
     }
     
@@ -515,6 +521,154 @@ public class XmlLayoutHandler {
     }
     
     /**
+     * Extracts layout name from an inflate statement in onCreateView.
+     */
+    public static String extractLayoutNameFromInflateStatement(String inflateStatement) {
+        if (inflateStatement != null && inflateStatement.contains("R.layout.")) {
+            int startIndex = inflateStatement.indexOf("R.layout.") + 9;
+            // Look for different patterns like comma, parenthesis, or semicolon
+            int endIndex = findEndIndex(inflateStatement, startIndex);
+            if (endIndex > startIndex) {
+                return inflateStatement.substring(startIndex, endIndex);
+            }
+        }
+        return null;
+    }
+    
+    private static int findEndIndex(String text, int startIndex) {
+        int commaIndex = text.indexOf(",", startIndex);
+        int parenIndex = text.indexOf(")", startIndex);
+        int semicolonIndex = text.indexOf(";", startIndex);
+        
+        // Find the first valid delimiter
+        int endIndex = text.length();
+        if (commaIndex != -1 && commaIndex < endIndex) endIndex = commaIndex;
+        if (parenIndex != -1 && parenIndex < endIndex) endIndex = parenIndex;
+        if (semicolonIndex != -1 && semicolonIndex < endIndex) endIndex = semicolonIndex;
+        
+        return endIndex;
+    }
+    
+    /**
+     * Finds the best matching layout file for a class by checking actual layout files.
+     * This helps ensure we use the correct layout name instead of inferring from class name.
+     */
+    public String findBestMatchingLayoutForClass(String className, String fallbackLayoutName) {
+        if (className == null) {
+            return fallbackLayoutName;
+        }
+        
+        // Get all layout files in the project
+        Collection<VirtualFile> layoutFiles = FileTypeIndex.getFiles(XmlFileType.INSTANCE, GlobalSearchScope.projectScope(project));
+        
+        // Convert class name to potential layout names
+        List<String> potentialNames = generatePotentialLayoutNames(className);
+        
+        // Check if any of the potential names match actual layout files
+        for (String potentialName : potentialNames) {
+            String fileName = potentialName + ".xml";
+            for (VirtualFile file : layoutFiles) {
+                if (file.getName().equals(fileName) && isLayoutFile(file)) {
+                    return potentialName;
+                }
+            }
+        }
+        
+        return fallbackLayoutName;
+    }
+    
+    /**
+     * Generates potential layout names based on class name conventions.
+     */
+    private List<String> generatePotentialLayoutNames(String className) {
+        List<String> names = new ArrayList<>();
+        
+        if (className.endsWith("Fragment")) {
+            String baseName = className.substring(0, className.length() - 8);
+            
+            // For patterns like AddEditBillingAddressFragment, try rearranging the words
+            if (baseName.contains("AddEdit") || baseName.contains("EditAdd")) {
+                // Try to rearrange AddEdit -> fragment_billing_address_add_edit
+                String rearranged = rearrangeClassNameForLayout(baseName);
+                if (rearranged != null) {
+                    names.add("fragment_" + rearranged);
+                }
+            }
+            
+            // Try different fragment naming conventions
+            names.add("fragment_" + camelToSnakeCaseStatic(baseName));
+            names.add(camelToSnakeCaseStatic(baseName) + "_fragment");
+            names.add(camelToSnakeCaseStatic(className));
+        } else if (className.endsWith("Activity")) {
+            String baseName = className.substring(0, className.length() - 8);
+            // Try different activity naming conventions
+            names.add("activity_" + camelToSnakeCaseStatic(baseName));
+            names.add(camelToSnakeCaseStatic(baseName) + "_activity");
+            names.add(camelToSnakeCaseStatic(className));
+        } else {
+            names.add(camelToSnakeCaseStatic(className));
+        }
+        
+        return names;
+    }
+    
+    /**
+     * Tries to rearrange class name parts to match common layout naming patterns.
+     * For example: AddEditBillingAddress -> billing_address_add_edit
+     */
+    private String rearrangeClassNameForLayout(String baseName) {
+        // Handle patterns like AddEditBillingAddress
+        if (baseName.startsWith("AddEdit")) {
+            String remaining = baseName.substring(7); // Remove "AddEdit"
+            String snakeCase = camelToSnakeCaseStatic(remaining);
+            return snakeCase + "_add_edit";
+        }
+        
+        if (baseName.startsWith("EditAdd")) {
+            String remaining = baseName.substring(7); // Remove "EditAdd"
+            String snakeCase = camelToSnakeCaseStatic(remaining);
+            return snakeCase + "_edit_add";
+        }
+        
+        // Handle patterns like BillingAddressAddEdit
+        if (baseName.endsWith("AddEdit")) {
+            String remaining = baseName.substring(0, baseName.length() - 7);
+            String snakeCase = camelToSnakeCaseStatic(remaining);
+            return snakeCase + "_add_edit";
+        }
+        
+        if (baseName.endsWith("EditAdd")) {
+            String remaining = baseName.substring(0, baseName.length() - 7);
+            String snakeCase = camelToSnakeCaseStatic(remaining);
+            return snakeCase + "_edit_add";
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Checks if a VirtualFile is a layout file.
+     */
+    private boolean isLayoutFile(VirtualFile virtualFile) {
+        VirtualFile parent = virtualFile.getParent();
+        if (parent != null && parent.getName().startsWith(LAYOUT_PREFIX)) {
+            return true;
+        }
+        
+        // Also check file content if needed
+        try {
+            PsiFile psiFile = PsiManager.getInstance(project).findFile(virtualFile);
+            if (psiFile instanceof XmlFile xmlFile) {
+                return isLayoutFile(xmlFile);
+            }
+        } catch (Exception e) {
+            // Ignore
+        }
+        
+        return false;
+    }
+    
+    /**
      * Extracts layout name from a setContentView statement or class name.
      */
     public static String extractLayoutNameFromSetContentView(String setContentViewStatement) {
@@ -881,6 +1035,160 @@ public class XmlLayoutHandler {
         
         return (clickableAttr != null && "true".equals(clickableAttr.getValue())) ||
                (focusableAttr != null && "true".equals(focusableAttr.getValue()));
+    }
+    
+    /**
+     * Ensures all include tags have IDs, adding them if missing.
+     * This creates a consistent nested binding structure.
+     */
+    public void ensureIncludeTagsHaveIds(String layoutName) {
+        XmlFile layoutFile = findLayoutFile(layoutName);
+        if (layoutFile == null) {
+            return;
+        }
+        
+        XmlTag rootTag = layoutFile.getRootTag();
+        if (rootTag == null) {
+            return;
+        }
+        
+        WriteCommandAction.runWriteCommandAction(project, "Add IDs to include tags", null, () -> {
+            addIdsToIncludeTagsRecursively(rootTag);
+        });
+    }
+    
+    /**
+     * Recursively adds IDs to include tags that don't have them.
+     */
+    private void addIdsToIncludeTagsRecursively(XmlTag tag) {
+        if ("include".equals(tag.getName())) {
+            XmlAttribute idAttribute = tag.getAttribute(ANDROID_ID);
+            if (idAttribute == null) {
+                // Generate ID from the layout attribute
+                String layoutValue = tag.getAttributeValue("layout");
+                if (layoutValue != null && layoutValue.startsWith("@layout/")) {
+                    String layoutName = layoutValue.substring(8); // Remove "@layout/"
+                    String includeId = generateIncludeIdFromLayoutName(layoutName);
+                    tag.setAttribute(ANDROID_ID, ID_PREFIX + includeId);
+                    System.out.println("Added ID '" + includeId + "' to include tag for layout: " + layoutName);
+                }
+            }
+        }
+        
+        XmlTag[] childTags = tag.getSubTags();
+        for (XmlTag childTag : childTags) {
+            addIdsToIncludeTagsRecursively(childTag);
+        }
+    }
+    
+    /**
+     * Generates an appropriate ID for an include tag based on the layout name.
+     */
+    private String generateIncludeIdFromLayoutName(String layoutName) {
+        // Convert layout_address_form -> layoutAddressForm
+        return convertLayoutNameToCamelCase(layoutName);
+    }
+
+    /**
+     * Gets the include tag ID for a field that exists in an included layout.
+     * Returns null if the field is not from an included layout.
+     */
+    public String getIncludeTagIdForField(String resourceId, String layoutName) {
+        XmlFile layoutFile = findLayoutFile(layoutName);
+        if (layoutFile == null) {
+            return null;
+        }
+        
+        XmlTag rootTag = layoutFile.getRootTag();
+        if (rootTag == null) {
+            return null;
+        }
+        
+        // Find include tags and check if the field exists in their layouts
+        List<XmlTag> includeTags = new ArrayList<>();
+        findIncludeTags(rootTag, includeTags);
+        
+        for (XmlTag includeTag : includeTags) {
+            String includedLayoutName = extractIncludedLayoutName(includeTag);
+            if (includedLayoutName != null) {
+                XmlFile includedFile = findLayoutFile(includedLayoutName);
+                if (includedFile != null) {
+                    Set<String> includedIds = extractExistingIds(includedFile);
+                    if (includedIds.contains(resourceId)) {
+                        // Get the include tag's ID
+                        XmlAttribute idAttribute = includeTag.getAttribute(ANDROID_ID);
+                        if (idAttribute != null) {
+                            String idValue = idAttribute.getValue();
+                            if (idValue != null && idValue.startsWith(ID_PREFIX)) {
+                                return idValue.substring(5); // Remove "@+id/"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        return null;
+    }
+
+    /**
+     * Checks if a resource ID exists in any included layout without an android:id on the include tag.
+     * When include tags don't have IDs, their child views are merged directly into the parent binding.
+     */
+    public boolean isFieldFromIncludedLayoutWithoutId(String resourceId, String layoutName) {
+        XmlFile layoutFile = findLayoutFile(layoutName);
+        if (layoutFile == null) {
+            return false;
+        }
+        
+        XmlTag rootTag = layoutFile.getRootTag();
+        if (rootTag == null) {
+            return false;
+        }
+        
+        // Find include tags without IDs
+        List<XmlTag> includeTagsWithoutId = findIncludeTagsWithoutId(rootTag);
+        
+        for (XmlTag includeTag : includeTagsWithoutId) {
+            String includedLayoutName = extractIncludedLayoutName(includeTag);
+            if (includedLayoutName != null) {
+                XmlFile includedFile = findLayoutFile(includedLayoutName);
+                if (includedFile != null) {
+                    Set<String> includedIds = extractExistingIds(includedFile);
+                    if (includedIds.contains(resourceId)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Finds all include tags that don't have android:id attributes.
+     */
+    private List<XmlTag> findIncludeTagsWithoutId(XmlTag rootTag) {
+        List<XmlTag> result = new ArrayList<>();
+        findIncludeTagsWithoutIdRecursive(rootTag, result);
+        return result;
+    }
+    
+    /**
+     * Recursively finds include tags without IDs.
+     */
+    private void findIncludeTagsWithoutIdRecursive(XmlTag tag, List<XmlTag> result) {
+        if ("include".equals(tag.getName())) {
+            XmlAttribute idAttribute = tag.getAttribute(ANDROID_ID);
+            if (idAttribute == null) {
+                result.add(tag);
+            }
+        }
+        
+        XmlTag[] childTags = tag.getSubTags();
+        for (XmlTag childTag : childTags) {
+            findIncludeTagsWithoutIdRecursive(childTag, result);
+        }
     }
     
     /**

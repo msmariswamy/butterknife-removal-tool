@@ -2,6 +2,10 @@ package com.butterkniferemoval;
 
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationType;
+import com.intellij.notification.Notifications;
 import com.intellij.psi.*;
 import com.intellij.psi.util.PsiTreeUtil;
 
@@ -12,6 +16,7 @@ import java.util.*;
  */
 public class EnhancedButterknifeConverter {
     
+    private static final Logger LOG = Logger.getInstance(EnhancedButterknifeConverter.class);
     private static final String BUTTERKNIFE_BIND_VIEW = "butterknife.BindView";
     private static final String R_ID_PREFIX = "R.id.";
     private static final String BINDING_PREFIX = "binding.";
@@ -23,6 +28,13 @@ public class EnhancedButterknifeConverter {
     }
 
     public static void convertFile(Project project, PsiJavaFile javaFile) {
+        // Show notification that conversion is starting
+        Notifications.Bus.notify(new Notification("ButterKnife", "Conversion Started", 
+            "Processing file: " + javaFile.getName(), NotificationType.INFORMATION), project);
+        
+        // Debug: Log all binding fields that will be generated
+        logExpectedBindingFields(project, javaFile);
+        
         WriteCommandAction.runWriteCommandAction(project, () -> convertButterknifeAnnotations(project, javaFile));
     }
 
@@ -40,6 +52,11 @@ public class EnhancedButterknifeConverter {
         if (bindViewFields.isEmpty() && onClickMethods.isEmpty()) {
             return;
         }
+        
+        // First, ensure all include tags have IDs for consistent binding structure
+        String layoutName = extractLayoutNameFromClass(mainClass);
+        XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+        xmlHandler.ensureIncludeTagsHaveIds(layoutName);
         
         // Validate and ensure XML IDs exist
         validateXmlIds(project, mainClass, bindViewFields);
@@ -80,10 +97,10 @@ public class EnhancedButterknifeConverter {
     }
     
     /**
-     * Extracts layout name from setContentView call or generates from class name.
+     * Extracts layout name from setContentView call, onCreateView inflate call, or generates from class name.
      */
     private static String extractLayoutNameFromClass(PsiClass psiClass) {
-        // First try to find layout name from onCreate method
+        // First try to find layout name from onCreate method (for Activities)
         PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
         if (onCreateMethod != null) {
             PsiCodeBlock codeBlock = onCreateMethod.getBody();
@@ -100,8 +117,30 @@ public class EnhancedButterknifeConverter {
             }
         }
         
-        // Fall back to generating layout name from class name
-        return XmlLayoutHandler.generateLayoutNameFromClassName(psiClass.getName());
+        // For Fragments, try to find layout name from onCreateView method
+        PsiMethod onCreateViewMethod = findOnCreateViewMethod(psiClass);
+        if (onCreateViewMethod != null) {
+            PsiCodeBlock codeBlock = onCreateViewMethod.getBody();
+            if (codeBlock != null) {
+                PsiStatement[] statements = codeBlock.getStatements();
+                for (PsiStatement statement : statements) {
+                    String statementText = statement.getText();
+                    if (statementText.contains("inflate") && statementText.contains("R.layout.")) {
+                        String layoutName = XmlLayoutHandler.extractLayoutNameFromInflateStatement(statementText);
+                        if (layoutName != null) {
+                            return layoutName;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fall back to generating layout name from class name - but prefer actual layout files
+        String classBasedLayoutName = XmlLayoutHandler.generateLayoutNameFromClassName(psiClass.getName());
+        
+        // Try to find if there's an actual layout file that matches the class name better
+        String betterLayoutName = findBestMatchingLayoutFile(psiClass, classBasedLayoutName);
+        return betterLayoutName != null ? betterLayoutName : classBasedLayoutName;
     }
 
     private static void collectBindViewFields(PsiClass psiClass, Map<String, FieldInfo> bindViewFields) {
@@ -209,9 +248,9 @@ public class EnhancedButterknifeConverter {
             // Check if this is an include tag and use the root view reference
             String layoutName = extractLayoutNameFromClass(psiClass);
             XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
-            System.out.println("DEBUG: Checking resourceId '" + resourceId + "' in layout '" + layoutName + "'");
+            LOG.info("DEBUG: Checking resourceId '" + resourceId + "' in layout '" + layoutName + "'");
             boolean isInclude = xmlHandler.isIncludeTagId(resourceId, layoutName);
-            System.out.println("DEBUG: isIncludeTagId result: " + isInclude);
+            LOG.info("DEBUG: isIncludeTagId result: " + isInclude);
             if (isInclude) {
                 // For include tags, find the main clickable element inside the included layout
                 String includedLayoutName = xmlHandler.getIncludedLayoutName(resourceId, layoutName);
@@ -230,17 +269,29 @@ public class EnhancedButterknifeConverter {
                     codeBlock.addAfter(statement, lastBindingStatement);
                 }
             } else {
-                // For regular views, check if this could be an include tag by checking field type
-                FieldInfo fieldInfo = bindViewFields.get(resourceId);
-                if (fieldInfo != null && isLikelyIncludeTag(fieldInfo)) {
-                    // This is likely an include tag, find the root element ID in the included layout
-                    String includedLayoutRootId = findIncludedLayoutRootId(project, psiClass, resourceId);
-                    if (includedLayoutRootId != null) {
-                        // Use the actual root element ID from the included layout
-                        String rootFieldName = convertResourceIdToBindingFieldName(includedLayoutRootId);
+                // Check if this field exists in an included layout
+                String includeTagId = xmlHandler.getIncludeTagIdForField(resourceId, layoutName);
+                if (includeTagId != null) {
+                    // This field is from an included layout, use nested structure
+                    String includeBindingFieldName = convertResourceIdToBindingFieldName(includeTagId);
+                    String listenerStatement = BINDING_PREFIX + includeBindingFieldName + "." + bindingFieldName + ".setOnClickListener(v -> " + methodCall + ");";
+                    PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                    codeBlock.addAfter(statement, lastBindingStatement);
+                } else if (xmlHandler.isIncludeTagId(resourceId, layoutName)) {
+                    // This is an include tag, get the included layout's root element ID
+                    String includedLayoutName = xmlHandler.getIncludedLayoutName(resourceId, layoutName);
+                    String includedRootId = xmlHandler.findOrCreateRootElementId(includedLayoutName);
+                    
+                    if (includedRootId != null) {
+                        // Use the root element ID from the included layout
+                        String rootFieldName = convertResourceIdToBindingFieldName(includedRootId);
                         String listenerStatement = BINDING_PREFIX + bindingFieldName + "." + rootFieldName + ".setOnClickListener(v -> " + methodCall + ");";
                         PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
                         codeBlock.addAfter(statement, lastBindingStatement);
+                        
+                        // Show notification
+                        Notifications.Bus.notify(new Notification("ButterKnife", "Include Tag Processed", 
+                            "Generated: " + listenerStatement, NotificationType.INFORMATION), project);
                     } else {
                         // Fallback to .getRoot() if root ID not found
                         String listenerStatement = BINDING_PREFIX + bindingFieldName + ".getRoot().setOnClickListener(v -> " + methodCall + ");";
@@ -310,9 +361,9 @@ public class EnhancedButterknifeConverter {
     private static String inferIncludedLayoutRootId(String includeResourceId) {
         if (includeResourceId == null) return null;
         
-        // Generate a likely root ID based on the include ID
-        // For example: googlePayButton -> googlePayButtonRoot
-        return includeResourceId + "Root";
+        // For regular views, the binding field name should match the resource ID
+        // Don't append "Root" suffix as it creates incorrect binding field names
+        return includeResourceId;
     }
     
     /**
@@ -338,6 +389,28 @@ public class EnhancedButterknifeConverter {
             }
         }
         return null;
+    }
+    
+    private static PsiMethod findOnCreateViewMethod(PsiClass psiClass) {
+        PsiMethod[] methods = psiClass.findMethodsByName("onCreateView", false);
+        for (PsiMethod method : methods) {
+            if (method.getParameterList().getParametersCount() == 3) {
+                return method;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Tries to find the best matching layout file for the class by checking actual layout files in the project.
+     */
+    private static String findBestMatchingLayoutFile(PsiClass psiClass, String classBasedLayoutName) {
+        try {
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(psiClass.getProject());
+            return xmlHandler.findBestMatchingLayoutForClass(psiClass.getName(), classBasedLayoutName);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static PsiStatement findLastBindingStatement(PsiCodeBlock codeBlock) {
@@ -543,11 +616,20 @@ public class EnhancedButterknifeConverter {
                     // Skip only if this is part of the field declaration itself
                     PsiElement parent = reference.getParent();
                     if (!(parent instanceof PsiField)) {
-                        // Check if this is an include tag reference
+                        // Check if this field exists in an included layout
                         String layoutName = extractLayoutNameFromClass(psiClass);
                         XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
-                        if (xmlHandler.isIncludeTagId(resourceId, layoutName)) {
-                            // For include tags, find the main clickable element inside the included layout
+                        
+                        // Check if this resource ID exists in any included layout
+                        String includeTagId = xmlHandler.getIncludeTagIdForField(resourceId, layoutName);
+                        if (includeTagId != null) {
+                            // This field is from an included layout, use nested structure
+                            String includeBindingFieldName = convertResourceIdToBindingFieldName(includeTagId);
+                            String replacementText = BINDING_PREFIX + includeBindingFieldName + "." + bindingFieldName;
+                            PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
+                            reference.replace(newExpression);
+                        } else if (xmlHandler.isIncludeTagId(resourceId, layoutName)) {
+                            // For include tags with IDs, find the main clickable element inside the included layout
                             String includedLayoutName = xmlHandler.getIncludedLayoutName(resourceId, layoutName);
                             String clickableElementId = xmlHandler.findClickableElementInIncludedLayout(includedLayoutName);
                             
@@ -564,28 +646,10 @@ public class EnhancedButterknifeConverter {
                                 reference.replace(newExpression);
                             }
                         } else {
-                            // Check if this could be an include tag by checking field type
-                            if (isLikelyIncludeTag(fieldInfo)) {
-                                // This is likely an include tag, find the root element ID in the included layout
-                                String includedLayoutRootId = findIncludedLayoutRootId(project, psiClass, resourceId);
-                                if (includedLayoutRootId != null) {
-                                    // Use the actual root element ID from the included layout
-                                    String rootFieldName = convertResourceIdToBindingFieldName(includedLayoutRootId);
-                                    String replacementText = BINDING_PREFIX + bindingFieldName + "." + rootFieldName;
-                                    PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
-                                    reference.replace(newExpression);
-                                } else {
-                                    // Fallback to .getRoot() if root ID not found
-                                    String replacementText = BINDING_PREFIX + bindingFieldName + ".getRoot()";
-                                    PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
-                                    reference.replace(newExpression);
-                                }
-                            } else {
-                                // For regular views, use direct binding field
-                                String replacementText = BINDING_PREFIX + bindingFieldName;
-                                PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
-                                reference.replace(newExpression);
-                            }
+                            // For regular views, use direct binding field
+                            String replacementText = BINDING_PREFIX + bindingFieldName;
+                            PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
+                            reference.replace(newExpression);
                         }
                     }
                 }
@@ -627,6 +691,45 @@ public class EnhancedButterknifeConverter {
                     statement.delete();
                 }
             }
+        }
+    }
+
+    /**
+     * Debug method to log all expected binding fields for troubleshooting.
+     */
+    private static void logExpectedBindingFields(Project project, PsiJavaFile javaFile) {
+        try {
+            PsiClass[] classes = javaFile.getClasses();
+            if (classes.length == 0) return;
+            
+            PsiClass mainClass = classes[0];
+            Map<String, FieldInfo> bindViewFields = new HashMap<>();
+            collectBindViewFields(mainClass, bindViewFields);
+            
+            if (bindViewFields.isEmpty()) return;
+            
+            StringBuilder logMessage = new StringBuilder("Expected binding fields:\n");
+            String layoutName = extractLayoutNameFromClass(mainClass);
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+            
+            for (Map.Entry<String, FieldInfo> entry : bindViewFields.entrySet()) {
+                String resourceId = entry.getKey();
+                String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+                boolean isFromIncludedLayoutWithoutId = xmlHandler.isFieldFromIncludedLayoutWithoutId(resourceId, layoutName);
+                boolean isIncludeTagId = xmlHandler.isIncludeTagId(resourceId, layoutName);
+                
+                logMessage.append("- ").append(resourceId)
+                          .append(" -> binding.").append(bindingFieldName)
+                          .append(" (includedWithoutId: ").append(isFromIncludedLayoutWithoutId)
+                          .append(", isIncludeTag: ").append(isIncludeTagId).append(")\n");
+            }
+            
+            Notifications.Bus.notify(new Notification("ButterKnife", "Debug: Binding Fields", 
+                logMessage.toString(), NotificationType.INFORMATION), project);
+                
+        } catch (Exception e) {
+            Notifications.Bus.notify(new Notification("ButterKnife", "Debug Error", 
+                "Error logging binding fields: " + e.getMessage(), NotificationType.ERROR), project);
         }
     }
 
