@@ -45,11 +45,27 @@ public class EnhancedButterknifeConverter {
         PsiClass mainClass = classes[0];
         Map<String, FieldInfo> bindViewFields = new HashMap<>();
         Map<String, String> onClickMethods = new HashMap<>();
+        Map<String, String> onCheckedChangedMethods = new HashMap<>();
+        Map<String, String> onLongClickMethods = new HashMap<>();
+        Map<String, String> onTextChangedMethods = new HashMap<>();
+        Map<String, String> onItemClickMethods = new HashMap<>();
+        Map<String, String> onTouchMethods = new HashMap<>();
+        Map<String, String> onItemSelectedMethods = new HashMap<>();
+        Map<String, String> onFocusChangeMethods = new HashMap<>();
         
         collectBindViewFields(mainClass, bindViewFields);
         collectOnClickMethods(mainClass, onClickMethods);
+        collectOnCheckedChangedMethods(mainClass, onCheckedChangedMethods);
+        collectOnLongClickMethods(mainClass, onLongClickMethods);
+        collectOnTextChangedMethods(mainClass, onTextChangedMethods);
+        collectOnItemClickMethods(mainClass, onItemClickMethods);
+        collectOnTouchMethods(mainClass, onTouchMethods);
+        collectOnItemSelectedMethods(mainClass, onItemSelectedMethods);
+        collectOnFocusChangeMethods(mainClass, onFocusChangeMethods);
         
-        if (bindViewFields.isEmpty() && onClickMethods.isEmpty()) {
+        if (bindViewFields.isEmpty() && onClickMethods.isEmpty() && onCheckedChangedMethods.isEmpty() && 
+            onLongClickMethods.isEmpty() && onTextChangedMethods.isEmpty() && onItemClickMethods.isEmpty() && 
+            onTouchMethods.isEmpty() && onItemSelectedMethods.isEmpty() && onFocusChangeMethods.isEmpty()) {
             return;
         }
         
@@ -67,6 +83,13 @@ public class EnhancedButterknifeConverter {
         replaceFieldReferences(project, mainClass, bindViewFields);
         removeFieldDeclarations(mainClass, bindViewFields);
         addOnClickListeners(project, mainClass, onClickMethods, bindViewFields);
+        addOnCheckedChangedListeners(project, mainClass, onCheckedChangedMethods, bindViewFields);
+        addOnLongClickListeners(project, mainClass, onLongClickMethods, bindViewFields);
+        addOnTextChangedListeners(project, mainClass, onTextChangedMethods, bindViewFields);
+        addOnItemClickListeners(project, mainClass, onItemClickMethods, bindViewFields);
+        addOnTouchListeners(project, mainClass, onTouchMethods, bindViewFields);
+        addOnItemSelectedListeners(project, mainClass, onItemSelectedMethods, bindViewFields);
+        addOnFocusChangeListeners(project, mainClass, onFocusChangeMethods, bindViewFields);
         removeButterknifeImports(javaFile);
         removeButterknifeBindCalls(mainClass);
     }
@@ -174,6 +197,132 @@ public class EnhancedButterknifeConverter {
         }
     }
 
+    private static void collectOnCheckedChangedMethods(PsiClass psiClass, Map<String, String> onCheckedChangedMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation onCheckedChangedAnnotation = method.getAnnotation("butterknife.OnCheckedChanged");
+            if (onCheckedChangedAnnotation != null) {
+                List<String> resourceIds = extractResourceIds(onCheckedChangedAnnotation);
+                if (!resourceIds.isEmpty()) {
+                    boolean hasParameters = method.getParameterList().getParametersCount() > 0;
+                    String methodCall = hasParameters ? method.getName() + "(view, isChecked)" : method.getName() + "()";
+                    
+                    for (String resourceId : resourceIds) {
+                        onCheckedChangedMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void collectOnLongClickMethods(PsiClass psiClass, Map<String, String> onLongClickMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation onLongClickAnnotation = method.getAnnotation("butterknife.OnLongClick");
+            if (onLongClickAnnotation != null) {
+                List<String> resourceIds = extractResourceIds(onLongClickAnnotation);
+                if (!resourceIds.isEmpty()) {
+                    boolean hasParameters = method.getParameterList().getParametersCount() > 0;
+                    String methodCall = hasParameters ? method.getName() + "(v)" : method.getName() + "()";
+                    
+                    for (String resourceId : resourceIds) {
+                        onLongClickMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void collectOnTextChangedMethods(PsiClass psiClass, Map<String, String> onTextChangedMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation onTextChangedAnnotation = method.getAnnotation("butterknife.OnTextChanged");
+            if (onTextChangedAnnotation != null) {
+                List<String> resourceIds = extractResourceIds(onTextChangedAnnotation);
+                if (!resourceIds.isEmpty()) {
+                    boolean hasParameters = method.getParameterList().getParametersCount() > 0;
+                    String methodCall = hasParameters ? method.getName() + "(s, start, before, count)" : method.getName() + "()";
+                    
+                    for (String resourceId : resourceIds) {
+                        onTextChangedMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void collectOnItemClickMethods(PsiClass psiClass, Map<String, String> onItemClickMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation onItemClickAnnotation = method.getAnnotation("butterknife.OnItemClick");
+            if (onItemClickAnnotation != null) {
+                List<String> resourceIds = extractResourceIds(onItemClickAnnotation);
+                if (!resourceIds.isEmpty()) {
+                    boolean hasParameters = method.getParameterList().getParametersCount() > 0;
+                    String methodCall = hasParameters ? method.getName() + "(parent, view, position, id)" : method.getName() + "()";
+                    
+                    for (String resourceId : resourceIds) {
+                        onItemClickMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void collectOnTouchMethods(PsiClass psiClass, Map<String, String> onTouchMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation onTouchAnnotation = method.getAnnotation("butterknife.OnTouch");
+            if (onTouchAnnotation != null) {
+                List<String> resourceIds = extractResourceIds(onTouchAnnotation);
+                if (!resourceIds.isEmpty()) {
+                    boolean hasParameters = method.getParameterList().getParametersCount() > 0;
+                    String methodCall = hasParameters ? method.getName() + "(v, event)" : method.getName() + "()";
+                    
+                    for (String resourceId : resourceIds) {
+                        onTouchMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void collectOnItemSelectedMethods(PsiClass psiClass, Map<String, String> onItemSelectedMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation onItemSelectedAnnotation = method.getAnnotation("butterknife.OnItemSelected");
+            if (onItemSelectedAnnotation != null) {
+                List<String> resourceIds = extractResourceIds(onItemSelectedAnnotation);
+                if (!resourceIds.isEmpty()) {
+                    boolean hasParameters = method.getParameterList().getParametersCount() > 0;
+                    String methodCall = hasParameters ? method.getName() + "(parent, view, position, id)" : method.getName() + "()";
+                    
+                    for (String resourceId : resourceIds) {
+                        onItemSelectedMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void collectOnFocusChangeMethods(PsiClass psiClass, Map<String, String> onFocusChangeMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation onFocusChangeAnnotation = method.getAnnotation("butterknife.OnFocusChange");
+            if (onFocusChangeAnnotation != null) {
+                List<String> resourceIds = extractResourceIds(onFocusChangeAnnotation);
+                if (!resourceIds.isEmpty()) {
+                    boolean hasParameters = method.getParameterList().getParametersCount() > 0;
+                    String methodCall = hasParameters ? method.getName() + "(v, hasFocus)" : method.getName() + "()";
+                    
+                    for (String resourceId : resourceIds) {
+                        onFocusChangeMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
     private static String extractResourceId(PsiAnnotation annotation) {
         List<String> ids = extractResourceIds(annotation);
         return ids.isEmpty() ? null : ids.get(0);
@@ -218,9 +367,24 @@ public class EnhancedButterknifeConverter {
         }
         
         for (PsiMethod method : psiClass.getMethods()) {
-            PsiAnnotation onClickAnnotation = method.getAnnotation("butterknife.OnClick");
-            if (onClickAnnotation != null) {
-                onClickAnnotation.delete();
+            String[] annotationsToRemove = {
+                "butterknife.OnClick",
+                "butterknife.OnCheckedChanged", 
+                "butterknife.OnLongClick",
+                "butterknife.OnTextChanged",
+                "butterknife.OnItemClick",
+                "butterknife.OnTouch",
+                "butterknife.OnItemSelected",
+                "butterknife.OnFocusChange",
+                "butterknife.OnEditorAction",
+                "butterknife.OnItemLongClick"
+            };
+            
+            for (String annotationName : annotationsToRemove) {
+                PsiAnnotation annotation = method.getAnnotation(annotationName);
+                if (annotation != null) {
+                    annotation.delete();
+                }
             }
         }
     }
@@ -308,6 +472,262 @@ public class EnhancedButterknifeConverter {
             
             // Additionally, check if this is an include tag and add click handling to the included layout
             handleIncludeClickEvent(project, psiClass, resourceId, methodCall);
+        }
+    }
+
+    private static void addOnCheckedChangedListeners(Project project, PsiClass psiClass, Map<String, String> onCheckedChangedMethods, Map<String, FieldInfo> bindViewFields) {
+        if (onCheckedChangedMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onCheckedChangedMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            
+            // Check if this field exists in an included layout
+            String layoutName = extractLayoutNameFromClass(psiClass);
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+            String includeTagId = xmlHandler.getIncludeTagIdForField(resourceId, layoutName);
+            
+            if (includeTagId != null) {
+                // This field is from an included layout, use nested structure
+                String includeBindingFieldName = convertResourceIdToBindingFieldName(includeTagId);
+                String listenerStatement = BINDING_PREFIX + includeBindingFieldName + "." + bindingFieldName + ".setOnCheckedChangeListener((view, isChecked) -> " + methodCall + ");";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            } else {
+                // Regular view, use direct binding field
+                String listenerStatement = BINDING_PREFIX + bindingFieldName + ".setOnCheckedChangeListener((view, isChecked) -> " + methodCall + ");";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            }
+        }
+    }
+
+    private static void addOnLongClickListeners(Project project, PsiClass psiClass, Map<String, String> onLongClickMethods, Map<String, FieldInfo> bindViewFields) {
+        if (onLongClickMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onLongClickMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            
+            String layoutName = extractLayoutNameFromClass(psiClass);
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+            String includeTagId = xmlHandler.getIncludeTagIdForField(resourceId, layoutName);
+            
+            if (includeTagId != null) {
+                String includeBindingFieldName = convertResourceIdToBindingFieldName(includeTagId);
+                String listenerStatement = BINDING_PREFIX + includeBindingFieldName + "." + bindingFieldName + ".setOnLongClickListener(v -> " + methodCall + ");";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            } else {
+                String listenerStatement = BINDING_PREFIX + bindingFieldName + ".setOnLongClickListener(v -> " + methodCall + ");";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            }
+        }
+    }
+
+    private static void addOnTextChangedListeners(Project project, PsiClass psiClass, Map<String, String> onTextChangedMethods, Map<String, FieldInfo> bindViewFields) {
+        if (onTextChangedMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onTextChangedMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            
+            String layoutName = extractLayoutNameFromClass(psiClass);
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+            String includeTagId = xmlHandler.getIncludeTagIdForField(resourceId, layoutName);
+            
+            if (includeTagId != null) {
+                String includeBindingFieldName = convertResourceIdToBindingFieldName(includeTagId);
+                String listenerStatement = BINDING_PREFIX + includeBindingFieldName + "." + bindingFieldName + ".addTextChangedListener(new TextWatcher() { public void onTextChanged(CharSequence s, int start, int before, int count) { " + methodCall + "; } public void beforeTextChanged(CharSequence s, int start, int count, int after) {} public void afterTextChanged(Editable s) {} });";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            } else {
+                String listenerStatement = BINDING_PREFIX + bindingFieldName + ".addTextChangedListener(new TextWatcher() { public void onTextChanged(CharSequence s, int start, int before, int count) { " + methodCall + "; } public void beforeTextChanged(CharSequence s, int start, int count, int after) {} public void afterTextChanged(Editable s) {} });";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            }
+        }
+    }
+
+    private static void addOnItemClickListeners(Project project, PsiClass psiClass, Map<String, String> onItemClickMethods, Map<String, FieldInfo> bindViewFields) {
+        if (onItemClickMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onItemClickMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            
+            String layoutName = extractLayoutNameFromClass(psiClass);
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+            String includeTagId = xmlHandler.getIncludeTagIdForField(resourceId, layoutName);
+            
+            if (includeTagId != null) {
+                String includeBindingFieldName = convertResourceIdToBindingFieldName(includeTagId);
+                String listenerStatement = BINDING_PREFIX + includeBindingFieldName + "." + bindingFieldName + ".setOnItemClickListener((parent, view, position, id) -> " + methodCall + ");";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            } else {
+                String listenerStatement = BINDING_PREFIX + bindingFieldName + ".setOnItemClickListener((parent, view, position, id) -> " + methodCall + ");";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            }
+        }
+    }
+
+    private static void addOnTouchListeners(Project project, PsiClass psiClass, Map<String, String> onTouchMethods, Map<String, FieldInfo> bindViewFields) {
+        if (onTouchMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onTouchMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            
+            String layoutName = extractLayoutNameFromClass(psiClass);
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+            String includeTagId = xmlHandler.getIncludeTagIdForField(resourceId, layoutName);
+            
+            if (includeTagId != null) {
+                String includeBindingFieldName = convertResourceIdToBindingFieldName(includeTagId);
+                String listenerStatement = BINDING_PREFIX + includeBindingFieldName + "." + bindingFieldName + ".setOnTouchListener((v, event) -> " + methodCall + ");";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            } else {
+                String listenerStatement = BINDING_PREFIX + bindingFieldName + ".setOnTouchListener((v, event) -> " + methodCall + ");";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            }
+        }
+    }
+
+    private static void addOnItemSelectedListeners(Project project, PsiClass psiClass, Map<String, String> onItemSelectedMethods, Map<String, FieldInfo> bindViewFields) {
+        if (onItemSelectedMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onItemSelectedMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            
+            String layoutName = extractLayoutNameFromClass(psiClass);
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+            String includeTagId = xmlHandler.getIncludeTagIdForField(resourceId, layoutName);
+            
+            if (includeTagId != null) {
+                String includeBindingFieldName = convertResourceIdToBindingFieldName(includeTagId);
+                String listenerStatement = BINDING_PREFIX + includeBindingFieldName + "." + bindingFieldName + ".setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() { public void onItemSelected(AdapterView<?> parent, View view, int position, long id) { " + methodCall + "; } public void onNothingSelected(AdapterView<?> parent) {} });";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            } else {
+                String listenerStatement = BINDING_PREFIX + bindingFieldName + ".setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() { public void onItemSelected(AdapterView<?> parent, View view, int position, long id) { " + methodCall + "; } public void onNothingSelected(AdapterView<?> parent) {} });";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            }
+        }
+    }
+
+    private static void addOnFocusChangeListeners(Project project, PsiClass psiClass, Map<String, String> onFocusChangeMethods, Map<String, FieldInfo> bindViewFields) {
+        if (onFocusChangeMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastBindingStatement = findLastBindingStatement(codeBlock);
+        if (lastBindingStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onFocusChangeMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
+            
+            String layoutName = extractLayoutNameFromClass(psiClass);
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+            String includeTagId = xmlHandler.getIncludeTagIdForField(resourceId, layoutName);
+            
+            if (includeTagId != null) {
+                String includeBindingFieldName = convertResourceIdToBindingFieldName(includeTagId);
+                String listenerStatement = BINDING_PREFIX + includeBindingFieldName + "." + bindingFieldName + ".setOnFocusChangeListener((v, hasFocus) -> " + methodCall + ");";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            } else {
+                String listenerStatement = BINDING_PREFIX + bindingFieldName + ".setOnFocusChangeListener((v, hasFocus) -> " + methodCall + ");";
+                PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                codeBlock.addAfter(statement, lastBindingStatement);
+            }
         }
     }
     

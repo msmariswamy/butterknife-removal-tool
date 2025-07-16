@@ -31,11 +31,19 @@ An IntelliJ IDEA/Android Studio plugin that automatically converts ButterKnife a
 - **View Hierarchy Analysis**: Analyzes view hierarchies to find the correct binding references
 
 ### ButterKnife Conversion
-- Converts `@BindView` annotations to View Binding references
-- Converts `@OnClick` annotations to appropriate click listeners
-- Generates View Binding initialization code with correct binding class names
-- Adds proper cleanup in `onDestroy()`
-- Removes ButterKnife imports and bind calls
+- **View Binding**: Converts `@BindView` annotations to View Binding references
+- **Event Listeners**: Converts all major ButterKnife event annotations to View Binding listeners:
+  - `@OnClick` → `setOnClickListener`
+  - `@OnCheckedChanged` → `setOnCheckedChangeListener` 
+  - `@OnLongClick` → `setOnLongClickListener`
+  - `@OnTextChanged` → `addTextChangedListener` with TextWatcher
+  - `@OnItemClick` → `setOnItemClickListener`
+  - `@OnTouch` → `setOnTouchListener`
+  - `@OnItemSelected` → `setOnItemSelectedListener` with AdapterView.OnItemSelectedListener
+  - `@OnFocusChange` → `setOnFocusChangeListener`
+- **Code Generation**: Generates View Binding initialization code with correct binding class names
+- **Cleanup**: Adds proper cleanup in `onDestroy()`
+- **Import Management**: Removes ButterKnife imports and bind calls
 
 ## 🔧 How It Works
 
@@ -56,15 +64,53 @@ An IntelliJ IDEA/Android Studio plugin that automatically converts ButterKnife a
 ### Before Conversion
 ```java
 public class MainActivity extends AppCompatActivity {
-    @BindView(R.id.username_input)
-    EditText usernameInput;
-    
-    @BindView(R.id.login_button)
-    Button loginButton;
+    @BindView(R.id.username_input) EditText usernameInput;
+    @BindView(R.id.password_input) EditText passwordInput;
+    @BindView(R.id.login_button) Button loginButton;
+    @BindView(R.id.cb_same_as_shipping) CheckBox cbSameAsShipping;
+    @BindView(R.id.spinner_country) Spinner spinnerCountry;
+    @BindView(R.id.list_items) ListView listItems;
     
     @OnClick(R.id.login_button)
     void onLoginClick() {
         // Handle login
+    }
+    
+    @OnLongClick(R.id.login_button)
+    boolean onLoginLongClick() {
+        // Handle long click
+        return true;
+    }
+    
+    @OnCheckedChanged(R.id.cb_same_as_shipping)
+    void onSameAsShippingChanged(boolean isChecked) {
+        // Handle checkbox state change
+    }
+    
+    @OnTextChanged(R.id.username_input)
+    void onUsernameChanged(CharSequence text) {
+        // Handle text change
+    }
+    
+    @OnItemClick(R.id.list_items)
+    void onItemClick(int position) {
+        // Handle list item click
+    }
+    
+    @OnItemSelected(R.id.spinner_country)
+    void onCountrySelected(int position) {
+        // Handle spinner selection
+    }
+    
+    @OnFocusChange(R.id.password_input)
+    void onPasswordFocusChange(boolean hasFocus) {
+        // Handle focus change
+    }
+    
+    @OnTouch(R.id.login_button)
+    boolean onLoginTouch(MotionEvent event) {
+        // Handle touch event
+        return false;
     }
     
     @Override
@@ -87,12 +133,62 @@ public class MainActivity extends AppCompatActivity {
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
         
+        // Generated event listeners
         binding.loginButton.setOnClickListener(v -> onLoginClick());
+        binding.loginButton.setOnLongClickListener(v -> onLoginLongClick());
+        binding.cbSameAsShipping.setOnCheckedChangeListener((view, isChecked) -> onSameAsShippingChanged(isChecked));
+        binding.usernameInput.addTextChangedListener(new TextWatcher() { 
+            public void onTextChanged(CharSequence s, int start, int before, int count) { 
+                onUsernameChanged(s, start, before, count); 
+            } 
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {} 
+            public void afterTextChanged(Editable s) {} 
+        });
+        binding.listItems.setOnItemClickListener((parent, view, position, id) -> onItemClick(parent, view, position, id));
+        binding.spinnerCountry.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() { 
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) { 
+                onCountrySelected(parent, view, position, id); 
+            } 
+            public void onNothingSelected(AdapterView<?> parent) {} 
+        });
+        binding.passwordInput.setOnFocusChangeListener((v, hasFocus) -> onPasswordFocusChange(v, hasFocus));
+        binding.loginButton.setOnTouchListener((v, event) -> onLoginTouch(v, event));
     }
     
     void onLoginClick() {
-        // Handle login
+        // Handle login - can now use binding directly
         String username = binding.usernameInput.getText().toString();
+        String password = binding.passwordInput.getText().toString();
+    }
+    
+    boolean onLoginLongClick() {
+        // Handle long click
+        return true;
+    }
+    
+    void onSameAsShippingChanged(boolean isChecked) {
+        // Handle checkbox state change
+    }
+    
+    void onUsernameChanged(CharSequence s, int start, int before, int count) {
+        // Handle text change
+    }
+    
+    void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+        // Handle list item click
+    }
+    
+    void onCountrySelected(AdapterView<?> parent, View view, int position, long id) {
+        // Handle spinner selection
+    }
+    
+    void onPasswordFocusChange(View v, boolean hasFocus) {
+        // Handle focus change
+    }
+    
+    boolean onLoginTouch(View v, MotionEvent event) {
+        // Handle touch event
+        return false;
     }
     
     @Override
@@ -102,6 +198,56 @@ public class MainActivity extends AppCompatActivity {
     }
 }
 ```
+
+## 📋 Supported ButterKnife Annotations
+
+### Complete Conversion Support
+
+| ButterKnife Annotation | View Binding Equivalent | Description |
+|------------------------|-------------------------|-------------|
+| `@BindView` | Direct field access via `binding.viewName` | Converts view references to binding fields |
+| `@OnClick` | `setOnClickListener` | Click event handling with lambda expressions |
+| `@OnLongClick` | `setOnLongClickListener` | Long click event handling |
+| `@OnCheckedChanged` | `setOnCheckedChangeListener` | Checkbox/Switch state change events |
+| `@OnTextChanged` | `addTextChangedListener` | Text change events with full TextWatcher implementation |
+| `@OnItemClick` | `setOnItemClickListener` | List/Grid view item click events |
+| `@OnTouch` | `setOnTouchListener` | Touch event handling |
+| `@OnItemSelected` | `setOnItemSelectedListener` | Spinner item selection events |
+| `@OnFocusChange` | `setOnFocusChangeListener` | View focus change events |
+
+### Event Handler Generation Examples
+
+**Click Events:**
+```java
+// ButterKnife: @OnClick(R.id.button)
+binding.button.setOnClickListener(v -> methodName());
+```
+
+**Text Changes:**
+```java
+// ButterKnife: @OnTextChanged(R.id.editText)
+binding.editText.addTextChangedListener(new TextWatcher() {
+    public void onTextChanged(CharSequence s, int start, int before, int count) { methodName(s, start, before, count); }
+    public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+    public void afterTextChanged(Editable s) {}
+});
+```
+
+**Item Selection:**
+```java
+// ButterKnife: @OnItemSelected(R.id.spinner)
+binding.spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+    public void onItemSelected(AdapterView<?> parent, View view, int position, long id) { methodName(parent, view, position, id); }
+    public void onNothingSelected(AdapterView<?> parent) {}
+});
+```
+
+### Parameter Handling
+
+The plugin intelligently handles method parameters:
+- **No parameters**: Generates `methodName()`
+- **With parameters**: Generates appropriate parameter lists based on the listener type
+- **Include layout support**: All annotations work seamlessly with included layouts using nested binding structure
 
 ## 🔄 Include Layout Handling
 
