@@ -426,11 +426,14 @@ public class EnhancedButterknifeConverter {
         }
     }
 
-    private static void removeFieldDeclarations(PsiClass psiClass) {
+    private static void removeFieldDeclarations(PsiClass psiClass, Map<String, FieldInfo> bindViewFields) {
         for (PsiField field : psiClass.getFields()) {
-            PsiAnnotation bindViewAnnotation = field.getAnnotation(BUTTERKNIFE_BIND_VIEW);
-            if (bindViewAnnotation != null) {
-                field.delete();
+            // Check if this field was a @BindView field by comparing with our collected data
+            for (FieldInfo fieldInfo : bindViewFields.values()) {
+                if (fieldInfo.name.equals(field.getName())) {
+                    field.delete();
+                    break;
+                }
             }
         }
     }
