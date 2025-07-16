@@ -35,17 +35,32 @@ public class ButterknifeConverter {
         PsiClass mainClass = classes[0];
         Map<String, FieldInfo> bindViewFields = new HashMap<>();
         Map<String, String> onClickMethods = new HashMap<>();
+        Map<String, String> onCheckedChangedMethods = new HashMap<>();
+        Map<String, String> onEditorActionMethods = new HashMap<>();
+        Map<String, String> onFocusChangeMethods = new HashMap<>();
+        Map<String, String> onTextChangedMethods = new HashMap<>();
         
         collectBindViewFields(mainClass, bindViewFields);
         collectOnClickMethods(mainClass, onClickMethods);
+        collectOnCheckedChangedMethods(mainClass, onCheckedChangedMethods);
+        collectOnEditorActionMethods(mainClass, onEditorActionMethods);
+        collectOnFocusChangeMethods(mainClass, onFocusChangeMethods);
+        collectOnTextChangedMethods(mainClass, onTextChangedMethods);
         
-        if (bindViewFields.isEmpty() && onClickMethods.isEmpty()) {
+        if (bindViewFields.isEmpty() && onClickMethods.isEmpty() && 
+            onCheckedChangedMethods.isEmpty() && onEditorActionMethods.isEmpty() &&
+            onFocusChangeMethods.isEmpty() && onTextChangedMethods.isEmpty()) {
             return;
         }
         
-        removeAnnotations(mainClass, bindViewFields, onClickMethods);
+        removeAnnotations(mainClass, bindViewFields, onClickMethods, onCheckedChangedMethods, 
+                         onEditorActionMethods, onFocusChangeMethods, onTextChangedMethods);
         addFindViewByIdCalls(project, mainClass, bindViewFields);
         addOnClickListeners(project, mainClass, bindViewFields, onClickMethods);
+        addOnCheckedChangedListeners(project, mainClass, bindViewFields, onCheckedChangedMethods);
+        addOnEditorActionListeners(project, mainClass, bindViewFields, onEditorActionMethods);
+        addOnFocusChangeListeners(project, mainClass, bindViewFields, onFocusChangeMethods);
+        addOnTextChangedListeners(project, mainClass, bindViewFields, onTextChangedMethods);
         removeButterknifeImports(javaFile);
         removeButterknifeBindCalls(mainClass);
     }
@@ -77,6 +92,82 @@ public class ButterknifeConverter {
                     // Add each resource ID separately
                     for (String resourceId : resourceIds) {
                         onClickMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void collectOnCheckedChangedMethods(PsiClass psiClass, Map<String, String> onCheckedChangedMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation annotation = method.getAnnotation("butterknife.OnCheckedChanged");
+            if (annotation != null) {
+                List<String> resourceIds = extractResourceIds(annotation);
+                if (!resourceIds.isEmpty()) {
+                    String methodCall = method.getName() + "()";
+                    for (String resourceId : resourceIds) {
+                        onCheckedChangedMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void collectOnEditorActionMethods(PsiClass psiClass, Map<String, String> onEditorActionMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation annotation = method.getAnnotation("butterknife.OnEditorAction");
+            if (annotation != null) {
+                List<String> resourceIds = extractResourceIds(annotation);
+                if (!resourceIds.isEmpty()) {
+                    String methodCall = method.getName() + "(v, actionId, event)";
+                    for (String resourceId : resourceIds) {
+                        onEditorActionMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void collectOnFocusChangeMethods(PsiClass psiClass, Map<String, String> onFocusChangeMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation annotation = method.getAnnotation("butterknife.OnFocusChange");
+            if (annotation != null) {
+                List<String> resourceIds = extractResourceIds(annotation);
+                if (!resourceIds.isEmpty()) {
+                    String methodCall = method.getName() + "(hasFocus)";
+                    for (String resourceId : resourceIds) {
+                        onFocusChangeMethods.put(resourceId, methodCall);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void collectOnTextChangedMethods(PsiClass psiClass, Map<String, String> onTextChangedMethods) {
+        PsiMethod[] methods = psiClass.getMethods();
+        for (PsiMethod method : methods) {
+            PsiAnnotation annotation = method.getAnnotation("butterknife.OnTextChanged");
+            if (annotation != null) {
+                List<String> resourceIds = extractResourceIds(annotation);
+                if (!resourceIds.isEmpty()) {
+                    // Check parameter type to determine how to call the method
+                    PsiParameter[] parameters = method.getParameterList().getParameters();
+                    String methodCall;
+                    if (parameters.length > 0) {
+                        String paramType = parameters[0].getType().getCanonicalText();
+                        if (paramType.contains("Editable")) {
+                            methodCall = "EDITABLE:" + method.getName(); // Special marker for Editable
+                        } else {
+                            methodCall = method.getName() + "(s)"; // CharSequence is fine
+                        }
+                    } else {
+                        methodCall = method.getName() + "()";
+                    }
+                    for (String resourceId : resourceIds) {
+                        onTextChangedMethods.put(resourceId, methodCall);
                     }
                 }
             }
@@ -121,7 +212,9 @@ public class ButterknifeConverter {
         return resourceIds;
     }
 
-    private static void removeAnnotations(PsiClass psiClass, Map<String, FieldInfo> bindViewFields, Map<String, String> onClickMethods) {
+    private static void removeAnnotations(PsiClass psiClass, Map<String, FieldInfo> bindViewFields, Map<String, String> onClickMethods,
+                                         Map<String, String> onCheckedChangedMethods, Map<String, String> onEditorActionMethods,
+                                         Map<String, String> onFocusChangeMethods, Map<String, String> onTextChangedMethods) {
         for (PsiField field : psiClass.getFields()) {
             PsiAnnotation annotation = field.getAnnotation("butterknife.BindView");
             if (annotation != null) {
@@ -130,9 +223,29 @@ public class ButterknifeConverter {
         }
         
         for (PsiMethod method : psiClass.getMethods()) {
-            PsiAnnotation annotation = method.getAnnotation("butterknife.OnClick");
-            if (annotation != null) {
-                annotation.delete();
+            PsiAnnotation onClickAnnotation = method.getAnnotation("butterknife.OnClick");
+            if (onClickAnnotation != null) {
+                onClickAnnotation.delete();
+            }
+            
+            PsiAnnotation onCheckedChangedAnnotation = method.getAnnotation("butterknife.OnCheckedChanged");
+            if (onCheckedChangedAnnotation != null) {
+                onCheckedChangedAnnotation.delete();
+            }
+            
+            PsiAnnotation onEditorActionAnnotation = method.getAnnotation("butterknife.OnEditorAction");
+            if (onEditorActionAnnotation != null) {
+                onEditorActionAnnotation.delete();
+            }
+            
+            PsiAnnotation onFocusChangeAnnotation = method.getAnnotation("butterknife.OnFocusChange");
+            if (onFocusChangeAnnotation != null) {
+                onFocusChangeAnnotation.delete();
+            }
+            
+            PsiAnnotation onTextChangedAnnotation = method.getAnnotation("butterknife.OnTextChanged");
+            if (onTextChangedAnnotation != null) {
+                onTextChangedAnnotation.delete();
             }
         }
     }
@@ -171,8 +284,8 @@ public class ButterknifeConverter {
         PsiCodeBlock codeBlock = onCreateMethod.getBody();
         if (codeBlock == null) return;
         
-        PsiStatement setContentViewStatement = findSetContentViewStatement(codeBlock);
-        if (setContentViewStatement == null) return;
+        PsiStatement lastFindViewStatement = findLastFindViewStatement(codeBlock);
+        if (lastFindViewStatement == null) return;
         
         PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
         
@@ -191,7 +304,7 @@ public class ButterknifeConverter {
             }
             
             PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
-            codeBlock.addAfter(statement, setContentViewStatement);
+            codeBlock.addAfter(statement, lastFindViewStatement);
         }
     }
 
@@ -213,6 +326,24 @@ public class ButterknifeConverter {
             }
         }
         return null;
+    }
+
+    private static PsiStatement findLastFindViewStatement(PsiCodeBlock codeBlock) {
+        PsiStatement[] statements = codeBlock.getStatements();
+        PsiStatement lastFindViewStatement = null;
+        
+        for (PsiStatement statement : statements) {
+            if (statement.getText().contains("findViewById")) {
+                lastFindViewStatement = statement;
+            }
+        }
+        
+        // If no findViewById statements found, fall back to setContentView
+        if (lastFindViewStatement == null) {
+            lastFindViewStatement = findSetContentViewStatement(codeBlock);
+        }
+        
+        return lastFindViewStatement;
     }
 
     private static void removeButterknifeImports(PsiJavaFile javaFile) {
@@ -237,6 +368,157 @@ public class ButterknifeConverter {
                     statement.delete();
                 }
             }
+        }
+    }
+
+    private static void addOnCheckedChangedListeners(Project project, PsiClass psiClass, Map<String, FieldInfo> bindViewFields, Map<String, String> onCheckedChangedMethods) {
+        if (onCheckedChangedMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastFindViewStatement = findLastFindViewStatement(codeBlock);
+        if (lastFindViewStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onCheckedChangedMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            FieldInfo fieldInfo = bindViewFields.get(resourceId);
+            
+            String listenerStatement;
+            if (fieldInfo != null) {
+                listenerStatement = fieldInfo.name + ".setOnCheckedChangeListener((buttonView, isChecked) -> " + methodCall + ");";
+            } else {
+                listenerStatement = "findViewById(R.id." + resourceId + ").setOnCheckedChangeListener((buttonView, isChecked) -> " + methodCall + ");";
+            }
+            
+            PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+            codeBlock.addAfter(statement, lastFindViewStatement);
+        }
+    }
+
+    private static void addOnEditorActionListeners(Project project, PsiClass psiClass, Map<String, FieldInfo> bindViewFields, Map<String, String> onEditorActionMethods) {
+        if (onEditorActionMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastFindViewStatement = findLastFindViewStatement(codeBlock);
+        if (lastFindViewStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onEditorActionMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            FieldInfo fieldInfo = bindViewFields.get(resourceId);
+            
+            String listenerStatement;
+            if (fieldInfo != null) {
+                listenerStatement = fieldInfo.name + ".setOnEditorActionListener((v, actionId, event) -> " + methodCall + ");";
+            } else {
+                listenerStatement = "findViewById(R.id." + resourceId + ").setOnEditorActionListener((v, actionId, event) -> " + methodCall + ");";
+            }
+            
+            PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+            codeBlock.addAfter(statement, lastFindViewStatement);
+        }
+    }
+
+    private static void addOnFocusChangeListeners(Project project, PsiClass psiClass, Map<String, FieldInfo> bindViewFields, Map<String, String> onFocusChangeMethods) {
+        if (onFocusChangeMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastFindViewStatement = findLastFindViewStatement(codeBlock);
+        if (lastFindViewStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onFocusChangeMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            FieldInfo fieldInfo = bindViewFields.get(resourceId);
+            
+            String listenerStatement;
+            if (fieldInfo != null) {
+                listenerStatement = fieldInfo.name + ".setOnFocusChangeListener((v, hasFocus) -> " + methodCall + ");";
+            } else {
+                listenerStatement = "findViewById(R.id." + resourceId + ").setOnFocusChangeListener((v, hasFocus) -> " + methodCall + ");";
+            }
+            
+            PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+            codeBlock.addAfter(statement, lastFindViewStatement);
+        }
+    }
+
+    private static void addOnTextChangedListeners(Project project, PsiClass psiClass, Map<String, FieldInfo> bindViewFields, Map<String, String> onTextChangedMethods) {
+        if (onTextChangedMethods.isEmpty()) return;
+        
+        PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
+        if (onCreateMethod == null) return;
+        
+        PsiCodeBlock codeBlock = onCreateMethod.getBody();
+        if (codeBlock == null) return;
+        
+        PsiStatement lastFindViewStatement = findLastFindViewStatement(codeBlock);
+        if (lastFindViewStatement == null) return;
+        
+        PsiElementFactory factory = JavaPsiFacade.getElementFactory(project);
+        
+        for (Map.Entry<String, String> entry : onTextChangedMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodCall = entry.getValue();
+            FieldInfo fieldInfo = bindViewFields.get(resourceId);
+            
+            String listenerStatement;
+            String actualMethodCall;
+            
+            // Check if this is an Editable parameter method
+            if (methodCall.startsWith("EDITABLE:")) {
+                String methodName = methodCall.substring(9); // Remove "EDITABLE:" prefix
+                actualMethodCall = methodName + "(s)"; // Use Editable from afterTextChanged
+                
+                if (fieldInfo != null) {
+                    listenerStatement = fieldInfo.name + ".addTextChangedListener(new TextWatcher() { " +
+                        "@Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {} " +
+                        "@Override public void onTextChanged(CharSequence s, int start, int before, int count) {} " +
+                        "@Override public void afterTextChanged(Editable s) { " + actualMethodCall + " } });";
+                } else {
+                    listenerStatement = "findViewById(R.id." + resourceId + ").addTextChangedListener(new TextWatcher() { " +
+                        "@Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {} " +
+                        "@Override public void onTextChanged(CharSequence s, int start, int before, int count) {} " +
+                        "@Override public void afterTextChanged(Editable s) { " + actualMethodCall + " } });";
+                }
+            } else {
+                // CharSequence parameter - use onTextChanged
+                if (fieldInfo != null) {
+                    listenerStatement = fieldInfo.name + ".addTextChangedListener(new TextWatcher() { " +
+                        "@Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {} " +
+                        "@Override public void onTextChanged(CharSequence s, int start, int before, int count) { " + methodCall + " } " +
+                        "@Override public void afterTextChanged(Editable s) {} });";
+                } else {
+                    listenerStatement = "findViewById(R.id." + resourceId + ").addTextChangedListener(new TextWatcher() { " +
+                        "@Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {} " +
+                        "@Override public void onTextChanged(CharSequence s, int start, int before, int count) { " + methodCall + " } " +
+                        "@Override public void afterTextChanged(Editable s) {} });";
+                }
+            }
+            
+            PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+            codeBlock.addAfter(statement, lastFindViewStatement);
         }
     }
 

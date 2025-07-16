@@ -15,6 +15,26 @@ public class ButterknifeRemovalTool {
         Pattern.MULTILINE
     );
     
+    private static final Pattern ON_CHECKED_CHANGED_PATTERN = Pattern.compile(
+        "@OnCheckedChanged\\s*\\(\\s*R\\.id\\.([^)]+)\\)\\s*\\n\\s*(?:public\\s+|private\\s+)?void\\s+(\\w+)\\s*\\(\\s*\\)\\s*\\{",
+        Pattern.MULTILINE | Pattern.DOTALL
+    );
+    
+    private static final Pattern ON_EDITOR_ACTION_PATTERN = Pattern.compile(
+        "@OnEditorAction\\s*\\(\\s*R\\.id\\.([^)]+)\\)\\s*\\n\\s*(?:public\\s+|private\\s+)?boolean\\s+(\\w+)\\s*\\([^)]*\\)\\s*\\{",
+        Pattern.MULTILINE | Pattern.DOTALL
+    );
+    
+    private static final Pattern ON_FOCUS_CHANGE_PATTERN = Pattern.compile(
+        "@OnFocusChange\\s*\\(\\s*R\\.id\\.([^)]+)\\)\\s*\\n\\s*(?:public\\s+|private\\s+)?void\\s+(\\w+)\\s*\\([^)]*\\)\\s*\\{",
+        Pattern.MULTILINE | Pattern.DOTALL
+    );
+    
+    private static final Pattern ON_TEXT_CHANGED_PATTERN = Pattern.compile(
+        "@OnTextChanged\\s*\\(\\s*R\\.id\\.([^)]+)\\)\\s*\\n\\s*(?:public\\s+|private\\s+)?void\\s+(\\w+)\\s*\\([^)]*\\)\\s*\\{",
+        Pattern.MULTILINE | Pattern.DOTALL
+    );
+    
     private static final Pattern BUTTERKNIFE_BIND = Pattern.compile(
         "ButterKnife\\.bind\\(this\\);?",
         Pattern.MULTILINE
@@ -73,13 +93,25 @@ public class ButterknifeRemovalTool {
         
         Map<String, FieldInfo> bindViewFields = extractBindViewFields(content);
         Map<String, String> onClickMethods = extractOnClickMethods(content);
+        Map<String, String> onCheckedChangedMethods = extractOnCheckedChangedMethods(content);
+        Map<String, String> onEditorActionMethods = extractOnEditorActionMethods(content);
+        Map<String, String> onFocusChangeMethods = extractOnFocusChangeMethods(content);
+        Map<String, String> onTextChangedMethods = extractOnTextChangedMethods(content);
         
         content = removeBindViewAnnotations(content);
         content = removeOnClickAnnotations(content);
+        content = removeOnCheckedChangedAnnotations(content);
+        content = removeOnEditorActionAnnotations(content);
+        content = removeOnFocusChangeAnnotations(content);
+        content = removeOnTextChangedAnnotations(content);
         content = removeButterknifeImports(content);
         content = removeButterknifeBindCalls(content);
         content = addFindViewByIdCalls(content, bindViewFields);
         content = addOnClickListeners(content, bindViewFields, onClickMethods);
+        content = addOnCheckedChangedListeners(content, bindViewFields, onCheckedChangedMethods);
+        content = addOnEditorActionListeners(content, bindViewFields, onEditorActionMethods);
+        content = addOnFocusChangeListeners(content, bindViewFields, onFocusChangeMethods);
+        content = addOnTextChangedListeners(content, bindViewFields, onTextChangedMethods);
         
         if (!content.equals(originalContent)) {
             Files.write(filePath, content.getBytes());
@@ -90,7 +122,12 @@ public class ButterknifeRemovalTool {
     private static boolean containsButterknife(String content) {
         return content.contains("@BindView") || 
                content.contains("@OnClick") || 
-               content.contains("ButterKnife.bind");
+               content.contains("@OnCheckedChanged") ||
+               content.contains("@OnEditorAction") ||
+               content.contains("@OnFocusChange") ||
+               content.contains("@OnTextChanged") ||
+               content.contains("ButterKnife.bind") ||
+               content.contains("import butterknife.");
     }
     
     private static Map<String, FieldInfo> extractBindViewFields(String content) {
@@ -120,12 +157,80 @@ public class ButterknifeRemovalTool {
         return methods;
     }
     
+    private static Map<String, String> extractOnCheckedChangedMethods(String content) {
+        Map<String, String> methods = new HashMap<>();
+        Matcher matcher = ON_CHECKED_CHANGED_PATTERN.matcher(content);
+        
+        while (matcher.find()) {
+            String resourceId = matcher.group(1);
+            String methodName = matcher.group(2);
+            methods.put(resourceId, methodName);
+        }
+        
+        return methods;
+    }
+    
+    private static Map<String, String> extractOnEditorActionMethods(String content) {
+        Map<String, String> methods = new HashMap<>();
+        Matcher matcher = ON_EDITOR_ACTION_PATTERN.matcher(content);
+        
+        while (matcher.find()) {
+            String resourceId = matcher.group(1);
+            String methodName = matcher.group(2);
+            methods.put(resourceId, methodName);
+        }
+        
+        return methods;
+    }
+    
+    private static Map<String, String> extractOnFocusChangeMethods(String content) {
+        Map<String, String> methods = new HashMap<>();
+        Matcher matcher = ON_FOCUS_CHANGE_PATTERN.matcher(content);
+        
+        while (matcher.find()) {
+            String resourceId = matcher.group(1);
+            String methodName = matcher.group(2);
+            methods.put(resourceId, methodName);
+        }
+        
+        return methods;
+    }
+    
+    private static Map<String, String> extractOnTextChangedMethods(String content) {
+        Map<String, String> methods = new HashMap<>();
+        Matcher matcher = ON_TEXT_CHANGED_PATTERN.matcher(content);
+        
+        while (matcher.find()) {
+            String resourceId = matcher.group(1);
+            String methodName = matcher.group(2);
+            methods.put(resourceId, methodName);
+        }
+        
+        return methods;
+    }
+    
     private static String removeBindViewAnnotations(String content) {
         return BIND_VIEW_PATTERN.matcher(content).replaceAll("$2 $3;");
     }
     
     private static String removeOnClickAnnotations(String content) {
         return ON_CLICK_PATTERN.matcher(content).replaceAll("public void $2() {");
+    }
+    
+    private static String removeOnCheckedChangedAnnotations(String content) {
+        return ON_CHECKED_CHANGED_PATTERN.matcher(content).replaceAll("    public void $2() {");
+    }
+    
+    private static String removeOnEditorActionAnnotations(String content) {
+        return ON_EDITOR_ACTION_PATTERN.matcher(content).replaceAll("    public boolean $2(TextView v, int actionId, KeyEvent event) {");
+    }
+    
+    private static String removeOnFocusChangeAnnotations(String content) {
+        return ON_FOCUS_CHANGE_PATTERN.matcher(content).replaceAll("    void $2(boolean hasFocus) {");
+    }
+    
+    private static String removeOnTextChangedAnnotations(String content) {
+        return ON_TEXT_CHANGED_PATTERN.matcher(content).replaceAll("    public void $2(CharSequence s, int start, int before, int count) {");
     }
     
     private static String removeButterknifeImports(String content) {
@@ -189,6 +294,113 @@ public class ButterknifeRemovalTool {
         Matcher matcher = onCreatePattern.matcher(content);
         if (matcher.find()) {
             return matcher.replaceFirst("$1\n\n" + listeners.toString());
+        }
+        
+        return content;
+    }
+    
+    private static String addOnCheckedChangedListeners(String content, Map<String, FieldInfo> fields, Map<String, String> onCheckedChangedMethods) {
+        if (onCheckedChangedMethods.isEmpty()) return content;
+        
+        StringBuilder listeners = new StringBuilder();
+        for (Map.Entry<String, String> entry : onCheckedChangedMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodName = entry.getValue();
+            FieldInfo field = fields.get(resourceId);
+            
+            if (field != null) {
+                listeners.append("        ")
+                    .append(field.name)
+                    .append(".setOnCheckedChangeListener((buttonView, isChecked) -> ")
+                    .append(methodName)
+                    .append("());\n");
+            }
+        }
+        
+        return addListenersToOnCreate(content, listeners.toString());
+    }
+    
+    private static String addOnEditorActionListeners(String content, Map<String, FieldInfo> fields, Map<String, String> onEditorActionMethods) {
+        if (onEditorActionMethods.isEmpty()) return content;
+        
+        StringBuilder listeners = new StringBuilder();
+        for (Map.Entry<String, String> entry : onEditorActionMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodName = entry.getValue();
+            FieldInfo field = fields.get(resourceId);
+            
+            if (field != null) {
+                listeners.append("        ")
+                    .append(field.name)
+                    .append(".setOnEditorActionListener((v, actionId, event) -> ")
+                    .append(methodName)
+                    .append("(actionId));\n");
+            }
+        }
+        
+        return addListenersToOnCreate(content, listeners.toString());
+    }
+    
+    private static String addOnFocusChangeListeners(String content, Map<String, FieldInfo> fields, Map<String, String> onFocusChangeMethods) {
+        if (onFocusChangeMethods.isEmpty()) return content;
+        
+        StringBuilder listeners = new StringBuilder();
+        for (Map.Entry<String, String> entry : onFocusChangeMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodName = entry.getValue();
+            FieldInfo field = fields.get(resourceId);
+            
+            if (field != null) {
+                listeners.append("        ")
+                    .append(field.name)
+                    .append(".setOnFocusChangeListener((v, hasFocus) -> ")
+                    .append(methodName)
+                    .append("(hasFocus));\n");
+            }
+        }
+        
+        return addListenersToOnCreate(content, listeners.toString());
+    }
+    
+    private static String addOnTextChangedListeners(String content, Map<String, FieldInfo> fields, Map<String, String> onTextChangedMethods) {
+        if (onTextChangedMethods.isEmpty()) return content;
+        
+        StringBuilder listeners = new StringBuilder();
+        for (Map.Entry<String, String> entry : onTextChangedMethods.entrySet()) {
+            String resourceId = entry.getKey();
+            String methodName = entry.getValue();
+            FieldInfo field = fields.get(resourceId);
+            
+            if (field != null) {
+                listeners.append("        ")
+                    .append(field.name)
+                    .append(".addTextChangedListener(new TextWatcher() {\n")
+                    .append("            @Override\n")
+                    .append("            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}\n")
+                    .append("            @Override\n")
+                    .append("            public void onTextChanged(CharSequence s, int start, int before, int count) {\n")
+                    .append("                ").append(methodName).append("(s);\n")
+                    .append("            }\n")
+                    .append("            @Override\n")
+                    .append("            public void afterTextChanged(Editable s) {}\n")
+                    .append("        });\n");
+            }
+        }
+        
+        return addListenersToOnCreate(content, listeners.toString());
+    }
+    
+    private static String addListenersToOnCreate(String content, String listeners) {
+        if (listeners.isEmpty()) return content;
+        
+        Pattern onCreatePattern = Pattern.compile(
+            "(protected\\s+void\\s+onCreate\\s*\\([^)]*\\)\\s*\\{[^}]*findViewById\\([^)]+\\);)",
+            Pattern.DOTALL
+        );
+        
+        Matcher matcher = onCreatePattern.matcher(content);
+        if (matcher.find()) {
+            return matcher.replaceFirst("$1\n\n" + listeners);
         }
         
         return content;
