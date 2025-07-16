@@ -70,7 +70,7 @@ public class EnhancedButterknifeConverter {
         XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
         Map<String, String> validationResults = xmlHandler.validateAndEnsureIds(bindViewFields, layoutName);
         
-        // Log validation results
+        // Log validation results and show notification for missing IDs
         for (Map.Entry<String, String> entry : validationResults.entrySet()) {
             String resourceId = entry.getKey();
             String result = entry.getValue();
@@ -209,6 +209,24 @@ public class EnhancedButterknifeConverter {
             
             PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
             codeBlock.addAfter(statement, lastBindingStatement);
+            
+            // Additionally, check if this is an include tag and add click handling to the included layout
+            handleIncludeClickEvent(project, psiClass, resourceId, methodCall);
+        }
+    }
+    
+    /**
+     * Handles click events for include tags by adding click handling to the included layout's root view.
+     */
+    private static void handleIncludeClickEvent(Project project, PsiClass psiClass, String resourceId, String methodCall) {
+        // Extract layout name from the class
+        String layoutName = extractLayoutNameFromClass(psiClass);
+        
+        // Check if this resourceId corresponds to an include tag
+        XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+        if (xmlHandler.isIncludeTagId(resourceId, layoutName)) {
+            // Add click handling to the included layout's root view
+            xmlHandler.addClickHandlingToIncludedLayout(resourceId, layoutName, methodCall);
         }
     }
 
@@ -233,19 +251,27 @@ public class EnhancedButterknifeConverter {
     }
 
     private static String convertResourceIdToBindingFieldName(String resourceId) {
-        StringBuilder result = new StringBuilder();
-        String[] parts = resourceId.split("_");
-        
-        for (int i = 0; i < parts.length; i++) {
-            if (i == 0) {
-                result.append(parts[i].toLowerCase());
-            } else {
-                result.append(parts[i].substring(0, 1).toUpperCase())
-                      .append(parts[i].substring(1).toLowerCase());
+        // Android View Binding preserves camelCase IDs as-is
+        // and converts snake_case IDs to camelCase
+        if (resourceId.contains("_")) {
+            // Convert snake_case to camelCase
+            StringBuilder result = new StringBuilder();
+            String[] parts = resourceId.split("_");
+            
+            for (int i = 0; i < parts.length; i++) {
+                if (i == 0) {
+                    result.append(parts[i].toLowerCase());
+                } else {
+                    result.append(parts[i].substring(0, 1).toUpperCase())
+                          .append(parts[i].substring(1).toLowerCase());
+                }
             }
+            
+            return result.toString();
+        } else {
+            // If no underscores, preserve the original casing
+            return resourceId;
         }
-        
-        return result.toString();
     }
 
     private static void addViewBindingSupport(Project project, PsiClass psiClass) {

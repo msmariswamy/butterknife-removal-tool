@@ -56,8 +56,8 @@ public class XmlLayoutHandler {
             if (existingIds.contains(resourceId)) {
                 idValidationResults.put(resourceId, "ID exists");
             } else {
-                // Generate appropriate ID based on field name and type
-                String suggestedId = generateIdForFieldObject(fieldInfoObj, resourceId);
+                // Generate appropriate ID - prefer to use the original resourceId as-is
+                String suggestedId = resourceId;
                 missingIds.put(resourceId, suggestedId);
                 idValidationResults.put(resourceId, "ID missing - will be created as: " + suggestedId);
             }
@@ -142,7 +142,7 @@ public class XmlLayoutHandler {
     }
     
     /**
-     * Recursively extracts IDs from XML tags.
+     * Recursively extracts IDs from XML tags, including IDs from included layouts.
      */
     private void extractIdsFromTag(XmlTag tag, Set<String> existingIds) {
         // Check for android:id attribute
@@ -155,11 +155,48 @@ public class XmlLayoutHandler {
             }
         }
         
+        // Handle <include> tags - extract IDs from included layouts
+        if ("include".equals(tag.getName())) {
+            String includedLayoutName = extractIncludedLayoutName(tag);
+            if (includedLayoutName != null) {
+                XmlFile includedFile = findLayoutFile(includedLayoutName);
+                if (includedFile != null) {
+                    Set<String> includedIds = extractExistingIds(includedFile);
+                    existingIds.addAll(includedIds);
+                }
+            }
+            
+            // Also check if the <include> tag itself has an android:id
+            // This allows referencing the included layout as a whole via the include's ID
+            XmlAttribute includeIdAttribute = tag.getAttribute(ANDROID_ID);
+            if (includeIdAttribute != null) {
+                String includeIdValue = includeIdAttribute.getValue();
+                if (includeIdValue != null && includeIdValue.startsWith(ID_PREFIX)) {
+                    String includeIdName = includeIdValue.substring(5); // Remove "@+id/"
+                    existingIds.add(includeIdName);
+                }
+            }
+        }
+        
         // Recursively check child tags
         XmlTag[] childTags = tag.getSubTags();
         for (XmlTag childTag : childTags) {
             extractIdsFromTag(childTag, existingIds);
         }
+    }
+    
+    /**
+     * Extracts the layout name from an <include> tag.
+     */
+    private String extractIncludedLayoutName(XmlTag includeTag) {
+        XmlAttribute layoutAttribute = includeTag.getAttribute("layout");
+        if (layoutAttribute != null) {
+            String layoutValue = layoutAttribute.getValue();
+            if (layoutValue != null && layoutValue.startsWith("@layout/")) {
+                return layoutValue.substring(8); // Remove "@layout/"
+            }
+        }
+        return null;
     }
     
     /**
@@ -284,6 +321,7 @@ public class XmlLayoutHandler {
     
     /**
      * Creates missing IDs in the layout file by finding appropriate views and adding android:id attributes.
+     * Also searches in included layouts for potential matches.
      */
     private void createMissingIds(XmlFile layoutFile, Map<String, String> missingIds, Map<String, ?> bindViewFields) {
         WriteCommandAction.runWriteCommandAction(project, "Add missing IDs", null, () -> {
@@ -295,7 +333,14 @@ public class XmlLayoutHandler {
                     Object fieldInfoObj = bindViewFields.get(originalId);
                     
                     if (fieldInfoObj != null) {
+                        // First try to find in main layout
                         XmlTag targetTag = findBestMatchingTag(rootTag, fieldInfoObj);
+                        
+                        // If not found in main layout, search in included layouts
+                        if (targetTag == null) {
+                            targetTag = findBestMatchingTagInIncludes(rootTag, fieldInfoObj);
+                        }
+                        
                         if (targetTag != null) {
                             addIdToTag(targetTag, suggestedId);
                         } else {
@@ -306,6 +351,46 @@ public class XmlLayoutHandler {
                 }
             }
         });
+    }
+    
+    /**
+     * Finds the best matching tag in included layouts.
+     */
+    private XmlTag findBestMatchingTagInIncludes(XmlTag rootTag, Object fieldInfoObj) {
+        List<XmlTag> includeTags = new ArrayList<>();
+        findIncludeTags(rootTag, includeTags);
+        
+        for (XmlTag includeTag : includeTags) {
+            String includedLayoutName = extractIncludedLayoutName(includeTag);
+            if (includedLayoutName != null) {
+                XmlFile includedFile = findLayoutFile(includedLayoutName);
+                if (includedFile != null) {
+                    XmlTag includedRootTag = includedFile.getRootTag();
+                    if (includedRootTag != null) {
+                        XmlTag targetTag = findBestMatchingTag(includedRootTag, fieldInfoObj);
+                        if (targetTag != null) {
+                            return targetTag;
+                        }
+                    }
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Finds all <include> tags in the layout.
+     */
+    private void findIncludeTags(XmlTag tag, List<XmlTag> results) {
+        if ("include".equals(tag.getName())) {
+            results.add(tag);
+        }
+        
+        XmlTag[] childTags = tag.getSubTags();
+        for (XmlTag childTag : childTags) {
+            findIncludeTags(childTag, results);
+        }
     }
     
     /**
@@ -352,7 +437,7 @@ public class XmlLayoutHandler {
     }
     
     /**
-     * Recursively finds tags matching the specified type.
+     * Recursively finds tags matching the specified type, including in included layouts.
      */
     private void findTagsByType(XmlTag tag, String targetType, List<XmlTag> results) {
         String tagName = tag.getName();
@@ -360,6 +445,20 @@ public class XmlLayoutHandler {
         // Check if tag type matches (handle both simple names and fully qualified names)
         if (matchesViewType(tagName, targetType)) {
             results.add(tag);
+        }
+        
+        // Handle <include> tags - search in included layouts
+        if ("include".equals(tagName)) {
+            String includedLayoutName = extractIncludedLayoutName(tag);
+            if (includedLayoutName != null) {
+                XmlFile includedFile = findLayoutFile(includedLayoutName);
+                if (includedFile != null) {
+                    XmlTag includedRootTag = includedFile.getRootTag();
+                    if (includedRootTag != null) {
+                        findTagsByType(includedRootTag, targetType, results);
+                    }
+                }
+            }
         }
         
         // Recursively search child tags
@@ -389,6 +488,7 @@ public class XmlLayoutHandler {
      */
     private void addIdToTag(XmlTag tag, String idName) {
         tag.setAttribute(ANDROID_ID, ID_PREFIX + idName);
+        System.out.println("Added ID '" + idName + "' to " + tag.getName() + " tag");
     }
     
     /**
@@ -408,8 +508,9 @@ public class XmlLayoutHandler {
         try {
             PsiComment comment = factory.createCommentFromText("<!--" + commentText + "-->", null);
             rootTag.addAfter(comment, rootTag.getFirstChild());
+            System.out.println("Added comment for missing ID: " + suggestedId + " (type: " + fieldType + ")");
         } catch (Exception e) {
-            // If comment creation fails, ignore silently
+            System.err.println("Failed to add comment for missing ID: " + suggestedId + " - " + e.getMessage());
         }
     }
     
@@ -462,5 +563,112 @@ public class XmlLayoutHandler {
         }
         
         return result.toString();
+    }
+    
+    /**
+     * Checks if a resource ID corresponds to an include tag.
+     */
+    public boolean isIncludeTagId(String resourceId, String layoutName) {
+        XmlFile layoutFile = findLayoutFile(layoutName);
+        if (layoutFile == null) {
+            return false;
+        }
+        
+        XmlTag rootTag = layoutFile.getRootTag();
+        if (rootTag == null) {
+            return false;
+        }
+        
+        return findIncludeTagById(rootTag, resourceId) != null;
+    }
+    
+    /**
+     * Finds an include tag by its ID.
+     */
+    private XmlTag findIncludeTagById(XmlTag tag, String resourceId) {
+        if ("include".equals(tag.getName())) {
+            XmlAttribute idAttribute = tag.getAttribute(ANDROID_ID);
+            if (idAttribute != null) {
+                String idValue = idAttribute.getValue();
+                if (idValue != null && idValue.equals(ID_PREFIX + resourceId)) {
+                    return tag;
+                }
+            }
+        }
+        
+        // Recursively search child tags
+        XmlTag[] childTags = tag.getSubTags();
+        for (XmlTag childTag : childTags) {
+            XmlTag found = findIncludeTagById(childTag, resourceId);
+            if (found != null) {
+                return found;
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Adds click handling to the root view of an included layout.
+     */
+    public void addClickHandlingToIncludedLayout(String includeId, String mainLayoutName, String methodCall) {
+        XmlFile mainLayoutFile = findLayoutFile(mainLayoutName);
+        if (mainLayoutFile == null) {
+            return;
+        }
+        
+        XmlTag rootTag = mainLayoutFile.getRootTag();
+        if (rootTag == null) {
+            return;
+        }
+        
+        XmlTag includeTag = findIncludeTagById(rootTag, includeId);
+        if (includeTag == null) {
+            return;
+        }
+        
+        String includedLayoutName = extractIncludedLayoutName(includeTag);
+        if (includedLayoutName == null) {
+            return;
+        }
+        
+        XmlFile includedLayoutFile = findLayoutFile(includedLayoutName);
+        if (includedLayoutFile == null) {
+            return;
+        }
+        
+        WriteCommandAction.runWriteCommandAction(project, "Add click handling to included layout", null, () -> {
+            XmlTag includedRootTag = includedLayoutFile.getRootTag();
+            if (includedRootTag != null) {
+                // Add android:id to the root tag if it doesn't have one
+                XmlAttribute rootIdAttribute = includedRootTag.getAttribute(ANDROID_ID);
+                if (rootIdAttribute == null) {
+                    // Generate a unique ID for the root tag based on the include ID
+                    String rootId = includeId + "Root";
+                    addIdToTag(includedRootTag, rootId);
+                    System.out.println("Added ID '" + rootId + "' to root tag of included layout: " + includedLayoutName);
+                }
+                
+                // Ensure the root tag is clickable
+                ensureClickableAttributes(includedRootTag);
+                
+                System.out.println("Enhanced included layout '" + includedLayoutName + "' for click handling");
+            }
+        });
+    }
+    
+    /**
+     * Ensures the tag has the necessary attributes for click handling.
+     */
+    private void ensureClickableAttributes(XmlTag tag) {
+        // Add clickable="true" if not present
+        if (tag.getAttribute("android:clickable") == null) {
+            tag.setAttribute("android:clickable", "true");
+        }
+        
+        // Add focusable="true" if not present (for accessibility)
+        if (tag.getAttribute("android:focusable") == null) {
+            tag.setAttribute("android:focusable", "true");
+        }
     }
 }
