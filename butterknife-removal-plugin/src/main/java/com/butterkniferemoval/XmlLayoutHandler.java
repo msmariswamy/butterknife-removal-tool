@@ -569,17 +569,23 @@ public class XmlLayoutHandler {
      * Checks if a resource ID corresponds to an include tag.
      */
     public boolean isIncludeTagId(String resourceId, String layoutName) {
+        System.out.println("DEBUG: isIncludeTagId called with resourceId='" + resourceId + "', layoutName='" + layoutName + "'");
         XmlFile layoutFile = findLayoutFile(layoutName);
         if (layoutFile == null) {
+            System.out.println("DEBUG: Layout file not found for: " + layoutName);
             return false;
         }
         
         XmlTag rootTag = layoutFile.getRootTag();
         if (rootTag == null) {
+            System.out.println("DEBUG: Root tag is null for layout: " + layoutName);
             return false;
         }
         
-        return findIncludeTagById(rootTag, resourceId) != null;
+        XmlTag includeTag = findIncludeTagById(rootTag, resourceId);
+        boolean result = includeTag != null;
+        System.out.println("DEBUG: findIncludeTagById result: " + result + (includeTag != null ? " (found tag: " + includeTag.getName() + ")" : ""));
+        return result;
     }
     
     /**
@@ -670,5 +676,258 @@ public class XmlLayoutHandler {
         if (tag.getAttribute("android:focusable") == null) {
             tag.setAttribute("android:focusable", "true");
         }
+    }
+    
+    /**
+     * Gets the included layout name for a given include tag ID.
+     */
+    public String getIncludedLayoutName(String includeId, String mainLayoutName) {
+        XmlFile mainLayoutFile = findLayoutFile(mainLayoutName);
+        if (mainLayoutFile == null) {
+            return null;
+        }
+        
+        XmlTag rootTag = mainLayoutFile.getRootTag();
+        if (rootTag == null) {
+            return null;
+        }
+        
+        XmlTag includeTag = findIncludeTagById(rootTag, includeId);
+        if (includeTag == null) {
+            return null;
+        }
+        
+        return extractIncludedLayoutName(includeTag);
+    }
+    
+    /**
+     * Finds the main clickable element in an included layout and ensures it has an ID.
+     * If no ID exists, creates appropriate IDs for internal elements.
+     */
+    public String findClickableElementInIncludedLayout(String includedLayoutName) {
+        if (includedLayoutName == null) {
+            return null;
+        }
+        
+        XmlFile includedLayoutFile = findLayoutFile(includedLayoutName);
+        if (includedLayoutFile == null) {
+            return null;
+        }
+        
+        XmlTag rootTag = includedLayoutFile.getRootTag();
+        if (rootTag == null) {
+            return null;
+        }
+        
+        // First check if the root tag already has an ID
+        XmlAttribute rootIdAttribute = rootTag.getAttribute(ANDROID_ID);
+        if (rootIdAttribute != null) {
+            String idValue = rootIdAttribute.getValue();
+            if (idValue != null && idValue.startsWith(ID_PREFIX)) {
+                // Root tag has ID, ensure it's clickable and return it
+                WriteCommandAction.runWriteCommandAction(project, "Ensure root tag is clickable", null, () -> {
+                    ensureClickableAttributes(rootTag);
+                });
+                return idValue.substring(5); // Remove "@+id/"
+            }
+        }
+        
+        // Root tag doesn't have ID, let's add one and make it clickable
+        WriteCommandAction.runWriteCommandAction(project, "Add clickable ID to included layout", null, () -> {
+            // Generate a meaningful ID based on the layout name
+            String rootId = generateRootIdFromLayoutName(includedLayoutName);
+            addIdToTag(rootTag, rootId);
+            
+            // Ensure the root tag is clickable
+            ensureClickableAttributes(rootTag);
+            
+            // Also add IDs to any internal elements that don't have them
+            addIdsToInternalElements(rootTag, includedLayoutName);
+        });
+        
+        // Return the ID we just added
+        XmlAttribute idAttribute = rootTag.getAttribute(ANDROID_ID);
+        if (idAttribute != null) {
+            String idValue = idAttribute.getValue();
+            if (idValue != null && idValue.startsWith(ID_PREFIX)) {
+                return idValue.substring(5); // Remove "@+id/"
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Generates a meaningful root ID from the layout name.
+     */
+    private String generateRootIdFromLayoutName(String layoutName) {
+        // Convert layout name to camelCase and add "Root"
+        // Example: buy_with_googlepay_button -> buyWithGooglepayButtonRoot
+        String camelCase = convertLayoutNameToCamelCase(layoutName);
+        return camelCase + "Root";
+    }
+    
+    /**
+     * Converts layout name to camelCase.
+     */
+    private String convertLayoutNameToCamelCase(String layoutName) {
+        if (layoutName == null || layoutName.isEmpty()) {
+            return "layout";
+        }
+        
+        String[] parts = layoutName.split("_");
+        StringBuilder result = new StringBuilder();
+        
+        for (int i = 0; i < parts.length; i++) {
+            if (i == 0) {
+                result.append(parts[i].toLowerCase());
+            } else {
+                if (!parts[i].isEmpty()) {
+                    result.append(parts[i].substring(0, 1).toUpperCase())
+                          .append(parts[i].substring(1).toLowerCase());
+                }
+            }
+        }
+        
+        return result.toString();
+    }
+    
+    /**
+     * Adds IDs to internal elements that don't have them.
+     */
+    private void addIdsToInternalElements(XmlTag rootTag, String layoutName) {
+        addIdsToElementsRecursively(rootTag, layoutName, new HashSet<>());
+    }
+    
+    /**
+     * Recursively adds IDs to elements that don't have them.
+     */
+    private void addIdsToElementsRecursively(XmlTag tag, String layoutName, Set<String> usedIds) {
+        XmlTag[] childTags = tag.getSubTags();
+        int elementCount = 0;
+        
+        for (XmlTag childTag : childTags) {
+            // Skip include tags - they have their own handling
+            if ("include".equals(childTag.getName())) {
+                continue;
+            }
+            
+            // Check if this element already has an ID
+            XmlAttribute idAttribute = childTag.getAttribute(ANDROID_ID);
+            if (idAttribute == null) {
+                // Generate a unique ID for this element
+                String elementId = generateElementId(childTag, layoutName, elementCount, usedIds);
+                if (elementId != null) {
+                    addIdToTag(childTag, elementId);
+                    usedIds.add(elementId);
+                    System.out.println("Added ID '" + elementId + "' to " + childTag.getName() + " in layout: " + layoutName);
+                }
+            } else {
+                // Track existing IDs to avoid duplicates
+                String existingId = idAttribute.getValue();
+                if (existingId != null && existingId.startsWith(ID_PREFIX)) {
+                    usedIds.add(existingId.substring(5));
+                }
+            }
+            
+            // Recursively process child elements
+            addIdsToElementsRecursively(childTag, layoutName, usedIds);
+            elementCount++;
+        }
+    }
+    
+    /**
+     * Generates a unique ID for an element based on its type and context.
+     */
+    private String generateElementId(XmlTag tag, String layoutName, int elementCount, Set<String> usedIds) {
+        String tagName = tag.getName();
+        String baseLayoutName = layoutName.replace("_", "");
+        
+        // Generate ID based on element type
+        String baseId;
+        if (tagName.contains("Button")) {
+            baseId = baseLayoutName + "Button";
+        } else if (tagName.contains("TextView")) {
+            baseId = baseLayoutName + "Text";
+        } else if (tagName.contains("ImageView")) {
+            baseId = baseLayoutName + "Image";
+        } else if (tagName.contains("LinearLayout")) {
+            baseId = baseLayoutName + "Linear";
+        } else if (tagName.contains("RelativeLayout")) {
+            baseId = baseLayoutName + "Relative";
+        } else if (tagName.contains("Layout")) {
+            baseId = baseLayoutName + "Layout";
+        } else {
+            baseId = baseLayoutName + "View";
+        }
+        
+        // Make sure the ID is unique
+        String finalId = baseId;
+        int counter = 1;
+        while (usedIds.contains(finalId)) {
+            finalId = baseId + counter;
+            counter++;
+        }
+        
+        return finalId;
+    }
+    
+    /**
+     * Checks if a tag is clickable (has clickable="true" or focusable="true").
+     */
+    private boolean isClickable(XmlTag tag) {
+        XmlAttribute clickableAttr = tag.getAttribute("android:clickable");
+        XmlAttribute focusableAttr = tag.getAttribute("android:focusable");
+        
+        return (clickableAttr != null && "true".equals(clickableAttr.getValue())) ||
+               (focusableAttr != null && "true".equals(focusableAttr.getValue()));
+    }
+    
+    /**
+     * Finds or creates a root element ID for an included layout.
+     */
+    public String findOrCreateRootElementId(String layoutName) {
+        System.out.println("DEBUG: findOrCreateRootElementId called for layout: " + layoutName);
+        XmlFile layoutFile = findLayoutFile(layoutName);
+        if (layoutFile == null) {
+            System.out.println("DEBUG: Layout file not found for: " + layoutName);
+            return null;
+        }
+        System.out.println("DEBUG: Found layout file: " + layoutFile.getName());
+        
+        XmlTag rootTag = layoutFile.getRootTag();
+        if (rootTag == null) {
+            return null;
+        }
+        
+        // Check if root tag already has an ID
+        XmlAttribute idAttribute = rootTag.getAttribute(ANDROID_ID);
+        if (idAttribute != null) {
+            String idValue = idAttribute.getValue();
+            if (idValue != null && idValue.startsWith(ID_PREFIX)) {
+                return idValue.substring(5); // Remove "@+id/"
+            }
+        }
+        
+        // Root tag doesn't have an ID, create one
+        System.out.println("DEBUG: Root tag has no ID, creating one...");
+        WriteCommandAction.runWriteCommandAction(project, "Add root ID to included layout", null, () -> {
+            try {
+                String rootId = generateRootIdFromLayoutName(layoutName);
+                System.out.println("DEBUG: Generated root ID: " + rootId);
+                addIdToTag(rootTag, rootId);
+                System.out.println("Created root ID '" + rootId + "' for included layout: " + layoutName);
+                
+                // Also ensure all internal elements have IDs
+                addIdsToInternalElements(rootTag, layoutName);
+                System.out.println("DEBUG: Finished adding IDs to internal elements");
+            } catch (Exception e) {
+                System.err.println("ERROR: Failed to add root ID: " + e.getMessage());
+                e.printStackTrace();
+            }
+        });
+        
+        // Return the newly created ID
+        return generateRootIdFromLayoutName(layoutName);
     }
 }

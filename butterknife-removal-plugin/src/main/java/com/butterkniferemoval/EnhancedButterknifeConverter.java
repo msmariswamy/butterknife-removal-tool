@@ -49,7 +49,7 @@ public class EnhancedButterknifeConverter {
         addViewBindingSupport(project, mainClass);
         replaceFieldReferences(project, mainClass, bindViewFields);
         removeFieldDeclarations(mainClass, bindViewFields);
-        addOnClickListeners(project, mainClass, onClickMethods);
+        addOnClickListeners(project, mainClass, onClickMethods, bindViewFields);
         removeButterknifeImports(javaFile);
         removeButterknifeBindCalls(mainClass);
     }
@@ -186,7 +186,7 @@ public class EnhancedButterknifeConverter {
         }
     }
 
-    private static void addOnClickListeners(Project project, PsiClass psiClass, Map<String, String> onClickMethods) {
+    private static void addOnClickListeners(Project project, PsiClass psiClass, Map<String, String> onClickMethods, Map<String, FieldInfo> bindViewFields) {
         if (onClickMethods.isEmpty()) return;
         
         PsiMethod onCreateMethod = findOnCreateMethod(psiClass);
@@ -205,14 +205,114 @@ public class EnhancedButterknifeConverter {
             String methodCall = entry.getValue();
             
             String bindingFieldName = convertResourceIdToBindingFieldName(resourceId);
-            String listenerStatement = BINDING_PREFIX + bindingFieldName + ".setOnClickListener(v -> " + methodCall + ");";
             
-            PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
-            codeBlock.addAfter(statement, lastBindingStatement);
+            // Check if this is an include tag and use the root view reference
+            String layoutName = extractLayoutNameFromClass(psiClass);
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+            System.out.println("DEBUG: Checking resourceId '" + resourceId + "' in layout '" + layoutName + "'");
+            boolean isInclude = xmlHandler.isIncludeTagId(resourceId, layoutName);
+            System.out.println("DEBUG: isIncludeTagId result: " + isInclude);
+            if (isInclude) {
+                // For include tags, find the main clickable element inside the included layout
+                String includedLayoutName = xmlHandler.getIncludedLayoutName(resourceId, layoutName);
+                String clickableElementId = xmlHandler.findClickableElementInIncludedLayout(includedLayoutName);
+                
+                if (clickableElementId != null) {
+                    // Access the specific clickable element inside the included layout
+                    String clickableFieldName = convertResourceIdToBindingFieldName(clickableElementId);
+                    String listenerStatement = BINDING_PREFIX + bindingFieldName + "." + clickableFieldName + ".setOnClickListener(v -> " + methodCall + ");";
+                    PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                    codeBlock.addAfter(statement, lastBindingStatement);
+                } else {
+                    // Fallback to getRoot() if no specific clickable element found
+                    String listenerStatement = BINDING_PREFIX + bindingFieldName + ".getRoot().setOnClickListener(v -> " + methodCall + ");";
+                    PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                    codeBlock.addAfter(statement, lastBindingStatement);
+                }
+            } else {
+                // For regular views, check if this could be an include tag by checking field type
+                FieldInfo fieldInfo = bindViewFields.get(resourceId);
+                if (fieldInfo != null && isLikelyIncludeTag(fieldInfo)) {
+                    // This is likely an include tag, find the root element ID in the included layout
+                    String includedLayoutRootId = findIncludedLayoutRootId(project, psiClass, resourceId);
+                    if (includedLayoutRootId != null) {
+                        // Use the actual root element ID from the included layout
+                        String rootFieldName = convertResourceIdToBindingFieldName(includedLayoutRootId);
+                        String listenerStatement = BINDING_PREFIX + bindingFieldName + "." + rootFieldName + ".setOnClickListener(v -> " + methodCall + ");";
+                        PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                        codeBlock.addAfter(statement, lastBindingStatement);
+                    } else {
+                        // Fallback to .getRoot() if root ID not found
+                        String listenerStatement = BINDING_PREFIX + bindingFieldName + ".getRoot().setOnClickListener(v -> " + methodCall + ");";
+                        PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                        codeBlock.addAfter(statement, lastBindingStatement);
+                    }
+                } else {
+                    // Regular view, use direct binding field
+                    String listenerStatement = BINDING_PREFIX + bindingFieldName + ".setOnClickListener(v -> " + methodCall + ");";
+                    PsiStatement statement = factory.createStatementFromText(listenerStatement, null);
+                    codeBlock.addAfter(statement, lastBindingStatement);
+                }
+            }
             
             // Additionally, check if this is an include tag and add click handling to the included layout
             handleIncludeClickEvent(project, psiClass, resourceId, methodCall);
         }
+    }
+    
+    /**
+     * Checks if a field is likely an include tag based on heuristics.
+     * Include tags often use layout types like RelativeLayout, LinearLayout, etc.
+     */
+    private static boolean isLikelyIncludeTag(FieldInfo fieldInfo) {
+        String fieldType = fieldInfo.type;
+        if (fieldType == null) return false;
+        
+        // Check if the field type suggests it's likely an include tag
+        // Include tags are often declared as layout types
+        return fieldType.contains("RelativeLayout") || 
+               fieldType.contains("LinearLayout") || 
+               fieldType.contains("ConstraintLayout") || 
+               fieldType.contains("FrameLayout") || 
+               fieldType.contains("Layout") ||
+               fieldType.contains("ViewGroup");
+    }
+    
+    /**
+     * Finds the root element ID in an included layout.
+     * This method will also ensure the root element has an ID if it doesn't have one.
+     */
+    private static String findIncludedLayoutRootId(Project project, PsiClass psiClass, String includeResourceId) {
+        try {
+            String layoutName = extractLayoutNameFromClass(psiClass);
+            XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+            
+            // First try to get the included layout name from the include tag
+            String includedLayoutName = xmlHandler.getIncludedLayoutName(includeResourceId, layoutName);
+            if (includedLayoutName != null) {
+                // Find or create the root element ID in the included layout
+                String rootId = xmlHandler.findOrCreateRootElementId(includedLayoutName);
+                return rootId;
+            }
+            
+            // If we can't find the included layout, try to infer from the include ID
+            // This is a fallback mechanism
+            return inferIncludedLayoutRootId(includeResourceId);
+        } catch (Exception e) {
+            System.err.println("Error finding included layout root ID: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Infers the root element ID from the include tag ID as a fallback.
+     */
+    private static String inferIncludedLayoutRootId(String includeResourceId) {
+        if (includeResourceId == null) return null;
+        
+        // Generate a likely root ID based on the include ID
+        // For example: googlePayButton -> googlePayButtonRoot
+        return includeResourceId + "Root";
     }
     
     /**
@@ -443,9 +543,50 @@ public class EnhancedButterknifeConverter {
                     // Skip only if this is part of the field declaration itself
                     PsiElement parent = reference.getParent();
                     if (!(parent instanceof PsiField)) {
-                        String replacementText = BINDING_PREFIX + bindingFieldName;
-                        PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
-                        reference.replace(newExpression);
+                        // Check if this is an include tag reference
+                        String layoutName = extractLayoutNameFromClass(psiClass);
+                        XmlLayoutHandler xmlHandler = new XmlLayoutHandler(project);
+                        if (xmlHandler.isIncludeTagId(resourceId, layoutName)) {
+                            // For include tags, find the main clickable element inside the included layout
+                            String includedLayoutName = xmlHandler.getIncludedLayoutName(resourceId, layoutName);
+                            String clickableElementId = xmlHandler.findClickableElementInIncludedLayout(includedLayoutName);
+                            
+                            if (clickableElementId != null) {
+                                // Access the specific clickable element inside the included layout
+                                String clickableFieldName = convertResourceIdToBindingFieldName(clickableElementId);
+                                String replacementText = BINDING_PREFIX + bindingFieldName + "." + clickableFieldName;
+                                PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
+                                reference.replace(newExpression);
+                            } else {
+                                // Fallback to getRoot() if no specific clickable element found
+                                String replacementText = BINDING_PREFIX + bindingFieldName + ".getRoot()";
+                                PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
+                                reference.replace(newExpression);
+                            }
+                        } else {
+                            // Check if this could be an include tag by checking field type
+                            if (isLikelyIncludeTag(fieldInfo)) {
+                                // This is likely an include tag, find the root element ID in the included layout
+                                String includedLayoutRootId = findIncludedLayoutRootId(project, psiClass, resourceId);
+                                if (includedLayoutRootId != null) {
+                                    // Use the actual root element ID from the included layout
+                                    String rootFieldName = convertResourceIdToBindingFieldName(includedLayoutRootId);
+                                    String replacementText = BINDING_PREFIX + bindingFieldName + "." + rootFieldName;
+                                    PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
+                                    reference.replace(newExpression);
+                                } else {
+                                    // Fallback to .getRoot() if root ID not found
+                                    String replacementText = BINDING_PREFIX + bindingFieldName + ".getRoot()";
+                                    PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
+                                    reference.replace(newExpression);
+                                }
+                            } else {
+                                // For regular views, use direct binding field
+                                String replacementText = BINDING_PREFIX + bindingFieldName;
+                                PsiExpression newExpression = factory.createExpressionFromText(replacementText, reference);
+                                reference.replace(newExpression);
+                            }
+                        }
                     }
                 }
             }
